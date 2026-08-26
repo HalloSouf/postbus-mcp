@@ -128,6 +128,12 @@ export function registerAccountTools(server: McpServer, context: ToolContext): v
           password: candidate.password,
         });
 
+        // An upsert keeps the row id, and the pool is keyed on it, so without
+        // this a relink kept serving the old connection for up to a minute —
+        // still authenticated with the password that was just rotated away,
+        // and against the old host if that changed too.
+        release(saved.id);
+
         return [
           `${replaced ? "Relinked" : "Linked"}: "${saved.alias}" → ${saved.email}`,
           `IMAP ${candidate.imapHost}:${candidate.imapPort} · SMTP ${candidate.smtpHost}:${candidate.smtpPort}`,

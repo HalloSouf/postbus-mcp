@@ -149,7 +149,7 @@ describe("mailbox storage", () => {
     };
 
     expect(stored.p).not.toContain("abcd");
-    expect(stored.p.startsWith("enc:v1:")).toBe(true);
+    expect(stored.p.startsWith("enc:v2:")).toBe(true);
     expect((getAccount(user.id, "personal") as ImapAccount).password).toBe("abcd efgh ijkl mnop");
   });
 
@@ -250,5 +250,37 @@ describe("alias collation", () => {
     expect(listAccounts(user.id)).toHaveLength(2);
     removeAccount(user.id, "work");
     expect(listAccounts(user.id).map((a) => a.alias)).toEqual(["personal"]);
+  });
+});
+
+describe("secret binding", () => {
+  // The stored secret is sealed against the row it lives in, so a blob moved
+  // between rows fails the tag check instead of opening someone else's mailbox.
+  it("refuses a secret copied into another user's row", () => {
+    const alice = createUser("Alice").user;
+    const bob = createUser("Bob").user;
+
+    addMailbox(alice.id, "work", "alice@example.com", "alice-secret");
+    addMailbox(bob.id, "work", "bob@example.com", "bob-secret");
+
+    const stolen = getDb()
+      .prepare("SELECT encrypted_password AS p FROM mail_accounts WHERE user_id = ?")
+      .get(alice.id) as { p: string };
+
+    getDb()
+      .prepare("UPDATE mail_accounts SET encrypted_password = ? WHERE user_id = ?")
+      .run(stolen.p, bob.id);
+
+    expect(() => getAccount(bob.id, "work")).toThrow(/Decryption failed/i);
+  });
+
+  it("keeps the row id across a relink, so the secret stays readable", () => {
+    const { user } = createUser("Soufiane");
+
+    const first = addMailbox(user.id, "work", "souf@example.com", "old-password");
+    const second = addMailbox(user.id, "work", "souf@example.com", "new-password");
+
+    expect(second.id).toBe(first.id);
+    expect((getAccount(user.id, "work") as ImapAccount).password).toBe("new-password");
   });
 });

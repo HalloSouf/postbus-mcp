@@ -40,6 +40,15 @@ function toInfo(row: AccountRow): AccountInfo {
   };
 }
 
+/**
+ * What the stored secret is bound to. The row id never changes once written,
+ * not even when a mailbox is relinked, so a blob stays readable in its own row
+ * and nowhere else.
+ */
+function secretContext(userId: string, accountId: string): string {
+  return `${userId}:${accountId}`;
+}
+
 // The only place secrets are decrypted.
 function toAccount(row: AccountRow): MailAccount {
   const base = {
@@ -52,7 +61,11 @@ function toAccount(row: AccountRow): MailAccount {
   };
 
   if (row.provider === "gmail-api") {
-    return { ...base, provider: "gmail-api", refreshToken: decryptSecret(row.encrypted_password) };
+    return {
+      ...base,
+      provider: "gmail-api",
+      refreshToken: decryptSecret(row.encrypted_password, secretContext(row.user_id, row.id)),
+    };
   }
 
   if (!row.imap_host || !row.smtp_host) {
@@ -72,7 +85,7 @@ function toAccount(row: AccountRow): MailAccount {
     smtpPort: row.smtp_port ?? 465,
     smtpSecure: row.smtp_secure === 1,
     username: row.username ?? row.email,
-    password: decryptSecret(row.encrypted_password),
+    password: decryptSecret(row.encrypted_password, secretContext(row.user_id, row.id)),
   };
 }
 
@@ -112,6 +125,18 @@ export function accountExists(userId: string, alias: string): boolean {
   );
 }
 
+/** The saved mailbox plus its row id, which the caller needs to drop any
+ * pooled connection still authenticated with the previous credentials. */
+export interface SavedAccount extends AccountInfo {
+  id: string;
+}
+
+// An upsert keeps the existing primary key, and the secret is bound to it, so
+// a relink has to reuse that id rather than mint one the row will not carry.
+function existingOrNewId(userId: string, alias: string): string {
+  return findAccountId(userId, alias) ?? newId();
+}
+
 export interface NewImapAccount {
   userId: string;
   alias: string;
@@ -127,9 +152,10 @@ export interface NewImapAccount {
   password: string;
 }
 
-export function saveImapAccount(input: NewImapAccount): AccountInfo {
+export function saveImapAccount(input: NewImapAccount): SavedAccount {
+  const id = existingOrNewId(input.userId, input.alias);
   const row: AccountRow = {
-    id: newId(),
+    id,
     user_id: input.userId,
     alias: input.alias.trim(),
     email: input.email.trim(),
@@ -142,12 +168,12 @@ export function saveImapAccount(input: NewImapAccount): AccountInfo {
     smtp_port: input.smtpPort,
     smtp_secure: input.smtpSecure ? 1 : 0,
     username: input.username,
-    encrypted_password: encryptSecret(input.password),
+    encrypted_password: encryptSecret(input.password, secretContext(input.userId, id)),
     created_at: new Date().toISOString(),
   };
 
   upsert(row);
-  return toInfo(row);
+  return { ...toInfo(row), id };
 }
 
 export interface NewGmailApiAccount {
@@ -157,9 +183,10 @@ export interface NewGmailApiAccount {
   refreshToken: string;
 }
 
-export function saveGmailApiAccount(input: NewGmailApiAccount): AccountInfo {
+export function saveGmailApiAccount(input: NewGmailApiAccount): SavedAccount {
+  const id = existingOrNewId(input.userId, input.alias);
   const row: AccountRow = {
-    id: newId(),
+    id,
     user_id: input.userId,
     alias: input.alias.trim(),
     email: input.email.trim(),
@@ -172,12 +199,12 @@ export function saveGmailApiAccount(input: NewGmailApiAccount): AccountInfo {
     smtp_port: null,
     smtp_secure: 1,
     username: null,
-    encrypted_password: encryptSecret(input.refreshToken),
+    encrypted_password: encryptSecret(input.refreshToken, secretContext(input.userId, id)),
     created_at: new Date().toISOString(),
   };
 
   upsert(row);
-  return toInfo(row);
+  return { ...toInfo(row), id };
 }
 
 // Delete by primary key. A DELETE ... RETURNING read with .get() removes every

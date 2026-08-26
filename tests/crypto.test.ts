@@ -11,6 +11,9 @@ import { PostbusError } from "../src/types.js";
 
 const KEY = process.env.MASTER_KEY as string;
 
+// Secrets are bound to the row they belong to.
+const CONTEXT = "user1:account1";
+
 // The derived key is cached, so restore the env after every key experiment.
 afterEach(() => {
   process.env.MASTER_KEY = KEY;
@@ -20,31 +23,31 @@ afterEach(() => {
 describe("encryptSecret / decryptSecret", () => {
   it("round-trips the original secret", () => {
     const secret = "abcd efgh ijkl mnop";
-    expect(decryptSecret(encryptSecret(secret))).toBe(secret);
+    expect(decryptSecret(encryptSecret(secret, CONTEXT), CONTEXT)).toBe(secret);
   });
 
   it("handles non-ASCII and long values", () => {
     const secret = `password-wíth-emoji-🔐-${"x".repeat(500)}`;
-    expect(decryptSecret(encryptSecret(secret))).toBe(secret);
+    expect(decryptSecret(encryptSecret(secret, CONTEXT), CONTEXT)).toBe(secret);
   });
 
   it("produces different ciphertext each time (own IV per secret)", () => {
-    const first = encryptSecret("same-password");
-    const second = encryptSecret("same-password");
+    const first = encryptSecret("same-password", CONTEXT);
+    const second = encryptSecret("same-password", CONTEXT);
 
     expect(first).not.toBe(second);
-    expect(decryptSecret(first)).toBe(decryptSecret(second));
+    expect(decryptSecret(first, CONTEXT)).toBe(decryptSecret(second, CONTEXT));
   });
 
   it("is recognisable as stored form and leaks nothing", () => {
-    const stored = encryptSecret("topsecret");
+    const stored = encryptSecret("topsecret", CONTEXT);
 
-    expect(stored.startsWith("enc:v1:")).toBe(true);
+    expect(stored.startsWith("enc:v2:")).toBe(true);
     expect(stored).not.toContain("topsecret");
   });
 
   it("rejects tampered ciphertext (GCM tag mismatch)", () => {
-    const stored = encryptSecret("topsecret");
+    const stored = encryptSecret("topsecret", CONTEXT);
     const [prefix, iv, tag, data] = [stored.slice(0, 7), ...stored.slice(7).split(":")] as [
       string,
       string,
@@ -53,27 +56,36 @@ describe("encryptSecret / decryptSecret", () => {
     ];
 
     const flipped = `${data.startsWith("A") ? "B" : "A"}${data.slice(1)}`;
-    expect(() => decryptSecret(`${prefix}${iv}:${tag}:${flipped}`)).toThrow(PostbusError);
+    expect(() => decryptSecret(`${prefix}${iv}:${tag}:${flipped}`, CONTEXT)).toThrow(PostbusError);
   });
 
   it("rejects plain text that is not an encrypted secret", () => {
-    expect(() => decryptSecret("just-a-password")).toThrow(/not stored encrypted/i);
+    expect(() => decryptSecret("just-a-password", CONTEXT)).toThrow(/not stored encrypted/i);
   });
 
   it("fails with a usable message on a different MASTER_KEY", () => {
-    const stored = encryptSecret("topsecret");
+    const stored = encryptSecret("topsecret", CONTEXT);
 
     process.env.MASTER_KEY = "f".repeat(64);
     resetKeyCache();
 
-    expect(() => decryptSecret(stored)).toThrow(/Decryption failed/i);
+    expect(() => decryptSecret(stored, CONTEXT)).toThrow(/Decryption failed/i);
   });
 
-  it("accepts a passphrase as key too (via scrypt)", () => {
+  // A passphrase was stretched against a salt hardcoded into the project, so
+  // one precomputed table covered every install that ever used one.
+  it("refuses a passphrase and says how to migrate", () => {
     process.env.MASTER_KEY = "a-long-passphrase-as-key";
     resetKeyCache();
 
-    expect(decryptSecret(encryptSecret("secret"))).toBe("secret");
+    expect(() => encryptSecret("secret", CONTEXT)).toThrow(/64 hex characters/);
+  });
+
+  it("refuses to decrypt a secret lifted into another row", () => {
+    const stored = encryptSecret("topsecret", "user1:account1");
+
+    expect(() => decryptSecret(stored, "user2:account9")).toThrow(/Decryption failed/i);
+    expect(decryptSecret(stored, "user1:account1")).toBe("topsecret");
   });
 });
 
@@ -91,11 +103,13 @@ describe("assertMasterKey", () => {
     }
   });
 
-  it("complains when the key is too short to be worth anything", () => {
-    process.env.MASTER_KEY = "kort";
-    resetKeyCache();
+  it("complains when the key is not a 256-bit hex key", () => {
+    for (const key of ["kort", "a-long-passphrase-as-key", "f".repeat(63), "z".repeat(64)]) {
+      process.env.MASTER_KEY = key;
+      resetKeyCache();
 
-    expect(() => assertMasterKey()).toThrow(/too short/i);
+      expect(() => assertMasterKey()).toThrow(/64 hex characters/);
+    }
   });
 });
 
