@@ -31,6 +31,7 @@ const MAILBOX_ALIASES: Record<string, MailboxHint> = {
 
 export function parseQuery(query: string): ParsedQuery {
   const criteria: SearchObject = {};
+  const negations: SearchObject[] = [];
   const freeText: string[] = [];
   const ignored: string[] = [];
   let mailbox: MailboxHint | undefined;
@@ -54,22 +55,22 @@ export function parseQuery(query: string): ParsedQuery {
 
     switch (key?.toLowerCase()) {
       case "from":
-        assign(criteria, "from", value, not);
+        assign(criteria, negations, "from", value, not);
         break;
       case "to":
-        assign(criteria, "to", value, not);
+        assign(criteria, negations, "to", value, not);
         break;
       case "cc":
-        assign(criteria, "cc", value, not);
+        assign(criteria, negations, "cc", value, not);
         break;
       case "bcc":
-        assign(criteria, "bcc", value, not);
+        assign(criteria, negations, "bcc", value, not);
         break;
       case "subject":
-        assign(criteria, "subject", value, not);
+        assign(criteria, negations, "subject", value, not);
         break;
       case "body":
-        assign(criteria, "body", value, not);
+        assign(criteria, negations, "body", value, not);
         break;
 
       case "is":
@@ -120,17 +121,44 @@ export function parseQuery(query: string): ParsedQuery {
 
   // IMAP supports a single TEXT term, so loose words become one search string.
   if (freeText.length > 0) criteria.text = freeText.join(" ");
+
+  applyNegations(criteria, negations);
   if (Object.keys(criteria).length === 0) criteria.all = true;
 
   return { criteria, raw: query.trim(), mailbox, requireAttachments, ignored };
 }
 
-function assign(criteria: SearchObject, field: keyof SearchObject, value: string, not: boolean) {
+function assign(
+  criteria: SearchObject,
+  negations: SearchObject[],
+  field: keyof SearchObject,
+  value: string,
+  not: boolean,
+) {
   if (not) {
-    criteria.not = { ...(criteria.not ?? {}), [field]: value };
+    negations.push({ [field]: value } as SearchObject);
     return;
   }
   (criteria as Record<string, unknown>)[field] = value;
+}
+
+/**
+ * Keys inside one IMAP search group are ANDed and NOT negates the whole group,
+ * so collecting every negation into a single `not` asked for NOT (A AND B) —
+ * true for a message that fails either half. "-from:spam -subject:sale" would
+ * happily return spam from that sender under any other subject.
+ *
+ * NOT (A OR B) is the same thing as NOT A AND NOT B, and `or` is the only
+ * combinator imapflow compiles, so build the query that way.
+ */
+function applyNegations(criteria: SearchObject, negations: SearchObject[]): void {
+  if (negations.length === 0) return;
+  if (negations.length === 1) {
+    criteria.not = negations[0] as SearchObject;
+    return;
+  }
+
+  criteria.not = { or: negations };
 }
 
 function applyStateOrMailbox(
@@ -201,17 +229,34 @@ function applyRelativeDate(
   criteria[field] = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 }
 
+const ABSOLUTE_DATE = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/;
+
+/**
+ * Parsed as UTC on purpose. `new Date("2026-3-1")` is local time while
+ * `new Date("2026-03-01")` is UTC, and imapflow formats the result with
+ * toISOString(), so east of Greenwich an unpadded date silently searched from
+ * the day before.
+ */
 function applyAbsoluteDate(
   criteria: SearchObject,
   value: string,
   field: "since" | "before" | "on",
   ignored: string[],
 ): void {
-  const parsed = new Date(value.replace(/\//g, "-"));
-  if (Number.isNaN(parsed.getTime())) {
+  const match = ABSOLUTE_DATE.exec(value.trim());
+  if (!match) {
     ignored.push(`${field}:${value}`);
     return;
   }
+
+  const [, year, month, day] = match;
+  const parsed = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+
+  if (Number.isNaN(parsed.getTime()) || parsed.getUTCMonth() !== Number(month) - 1) {
+    ignored.push(`${field}:${value}`);
+    return;
+  }
+
   criteria[field] = parsed;
 }
 

@@ -113,3 +113,60 @@ describe("parseQuery", () => {
     expect(parsed.ignored).toHaveLength(2);
   });
 });
+
+// Compiling the criteria is the only way to see what the server is really
+// asked; the shape of the object hides the grouping.
+async function compile(query: string): Promise<string> {
+  const { searchCompiler } = await import("imapflow/lib/search-compiler.js");
+  type Token = ReturnType<typeof searchCompiler>[number];
+
+  const flatten = (node: Token): string =>
+    Array.isArray(node) ? `(${node.map(flatten).join(" ")})` : node.value;
+
+  return searchCompiler(
+    { mailbox: { uidNext: 1 }, capabilities: new Map() },
+    parseQuery(query).criteria,
+  )
+    .map(flatten)
+    .join(" ");
+}
+
+describe("negation", () => {
+  it("negates a single term", async () => {
+    expect(await compile("-from:spam@example.com")).toBe("NOT FROM spam@example.com");
+  });
+
+  // NOT over a group of keys is NOT (A AND B), which is true whenever either
+  // half fails — so spam from that sender under any other subject came back.
+  it("negates each term separately instead of the group", async () => {
+    const compiled = await compile("-from:spam@example.com -subject:sale");
+
+    expect(compiled).toBe("NOT OR FROM spam@example.com SUBJECT sale");
+    expect(compiled).not.toBe("NOT (FROM spam@example.com SUBJECT sale)");
+  });
+
+  it("keeps positive terms alongside negated ones", async () => {
+    const parsed = parseQuery("to:me@example.com -from:spam@example.com");
+
+    expect(parsed.criteria.to).toBe("me@example.com");
+    expect(parsed.criteria.not).toEqual({ from: "spam@example.com" });
+  });
+});
+
+describe("absolute dates", () => {
+  // new Date("2026-3-1") is local time while new Date("2026-03-01") is UTC, and
+  // imapflow formats with toISOString(), so east of Greenwich the unpadded form
+  // searched from the previous day.
+  it("reads padded and unpadded dates as the same UTC day", () => {
+    const padded = parseQuery("after:2026-03-01").criteria.since as Date;
+    const unpadded = parseQuery("after:2026/3/1").criteria.since as Date;
+
+    expect(unpadded.toISOString()).toBe(padded.toISOString());
+    expect(padded.toISOString()).toBe("2026-03-01T00:00:00.000Z");
+  });
+
+  it("reports a date it cannot read instead of guessing", () => {
+    expect(parseQuery("after:yesterday").ignored).toContain("since:yesterday");
+    expect(parseQuery("before:2026-13-40").ignored).toContain("before:2026-13-40");
+  });
+});
