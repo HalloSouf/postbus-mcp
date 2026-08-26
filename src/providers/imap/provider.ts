@@ -6,6 +6,7 @@ import {
   type SearchObject,
 } from "imapflow";
 import { MAIL_TIMEOUT_MS, MAX_MESSAGE_BYTES } from "../../config.js";
+import { logEvent } from "../../log.js";
 import {
   PostbusError,
   type ImapAccount,
@@ -14,6 +15,7 @@ import {
   type MessageSummary,
   type SearchResult,
   type SendOptions,
+  type SendResult,
 } from "../../types.js";
 import {
   imapTlsOptions,
@@ -263,22 +265,38 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
     subject: string,
     body: string,
     options: SendOptions = {},
-  ): Promise<string> {
+  ): Promise<SendResult> {
     const mail = await composeMail(account, to, subject, body, options);
     await sendComposed(account, mail);
 
-    await withImap(account, async (context) => {
-      // Gmail stores its own copy in Sent; other servers expect us to.
-      if (context.gmail) return;
+    const notes: string[] = [];
 
-      const sent = await resolveMailbox(account.id, context, "sent");
-      if (!sent) return;
+    // The message is out; a failed copy must not undo that. But swallowing the
+    // failure silently left the user hunting for a mail in Sent that was never
+    // put there, with nothing anywhere saying why.
+    try {
+      await withImap(account, async (context) => {
+        // Gmail stores its own copy in Sent; other servers expect us to.
+        if (context.gmail) return;
 
-      await context.client.append(sent, mail.raw, ["\\Seen"]);
-      // The message is out; a failed copy must not undo that.
-    }).catch(() => {});
+        const sent = await resolveMailbox(account.id, context, "sent");
+        if (!sent) {
+          notes.push("This server has no Sent folder, so no copy was filed there.");
+          return;
+        }
 
-    return mail.messageId;
+        await context.client.append(sent, mail.raw, ["\\Seen"]);
+      });
+    } catch (error) {
+      logEvent({
+        event: "sent_copy_failed",
+        accountId: account.id,
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      });
+      notes.push("The message was sent, but a copy could not be filed in Sent.");
+    }
+
+    return { messageId: mail.messageId, notes };
   }
 }
 

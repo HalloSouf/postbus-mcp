@@ -18,16 +18,18 @@ function fieldNames(headerBlock: string): string[] {
     .filter(Boolean);
 }
 
+async function build(message: Partial<Parameters<typeof buildMimeMessage>[0]> = {}) {
+  return buildMimeMessage({
+    from: FROM,
+    to: "client@example.com",
+    subject: "Hello",
+    body: "Text",
+    ...message,
+  });
+}
+
 async function headers(message: Partial<Parameters<typeof buildMimeMessage>[0]> = {}) {
-  return headersOf(
-    await buildMimeMessage({
-      from: FROM,
-      to: "client@example.com",
-      subject: "Hello",
-      body: "Text",
-      ...message,
-    }),
-  );
+  return headersOf((await build(message)).raw);
 }
 
 describe("buildMimeMessage", () => {
@@ -52,13 +54,7 @@ describe("buildMimeMessage", () => {
   // The blank line is what ends the header block, so a recipient carrying one
   // could otherwise dictate the entire body.
   it("refuses to let a recipient end the header block early", async () => {
-    const raw = await buildMimeMessage({
-      from: FROM,
-      to: "a@example.com\r\n\r\nINJECTED BODY\r\nX: ",
-      subject: "Hello",
-      body: "Text",
-    });
-
+    const { raw } = await build({ to: "a@example.com\r\n\r\nINJECTED BODY\r\nX: " });
     const [headerBlock = "", ...rest] = raw.toString("utf8").split("\r\n\r\n");
 
     expect(rest.join("\r\n\r\n").trim()).toBe("Text");
@@ -122,13 +118,16 @@ describe("buildMimeMessage", () => {
   });
 
   it("encodes the message for the Gmail raw field", async () => {
-    const raw = await buildMimeMessage({
-      from: FROM,
-      to: "client@example.com",
-      subject: "Hello",
-      body: "Text",
-    });
+    const { raw } = await build();
 
     expect(Buffer.from(toBase64Url(raw), "base64url").toString("utf8")).toBe(raw.toString("utf8"));
+  });
+
+  // Reported back to the caller, so a reply has something to thread against.
+  it("reports the Message-ID it generated", async () => {
+    const built = await build();
+
+    expect(built.messageId).toMatch(/^<.+@postbus\.test>$/);
+    expect(headersOf(built.raw)).toContain(`Message-ID: ${built.messageId}`);
   });
 });

@@ -117,7 +117,8 @@ export function registerMailTools(server: McpServer, context: ToolContext): void
       description:
         "Sends a new message from one of your mailboxes straight away. There is no draft " +
         "step, so confirm the content with the user first. Separate multiple recipients " +
-        "with commas.",
+        "with commas. To answer an existing message, pass its Message-ID as in_reply_to so " +
+        "the reply threads properly.",
       inputSchema: {
         account: z.string().min(1).describe("Alias of the mailbox to send from."),
         to: z.string().min(1).describe("Recipient(s), comma separated."),
@@ -126,26 +127,36 @@ export function registerMailTools(server: McpServer, context: ToolContext): void
         cc: z.string().optional().describe("Cc recipients, comma separated."),
         bcc: z.string().optional().describe("Bcc recipients, comma separated."),
         reply_to: z.string().optional().describe("Reply-To address, if it differs."),
+        in_reply_to: z
+          .string()
+          .optional()
+          .describe(
+            "Message-ID of the message you are answering, so mail clients hang this reply " +
+              "under the conversation. Take it from the `Message-ID:` line of get_message.",
+          ),
         html: z.boolean().default(false).describe("Send the body as HTML instead of plain text."),
       },
       // Sending cannot be undone and the content may have been steered by a
       // message the model just read, so clients must ask before calling this.
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
-    ({ account, to, subject, body, cc, bcc, reply_to, html }) =>
+    ({ account, to, subject, body, cc, bcc, reply_to, in_reply_to, html }) =>
       guard("send_email", context.user, async () => {
         const { account: resolved, provider } = resolveAccount(context, account);
-        const messageId = await provider.send(resolved, to, subject, body, {
+        const sent = await provider.send(resolved, to, subject, body, {
           cc,
           bcc,
           replyTo: reply_to,
           html: html ?? false,
+          inReplyTo: in_reply_to,
+          references: in_reply_to,
         });
 
         return [
           `Sent from "${account}" (${resolved.email}) to ${to}.`,
           cc ? `Cc: ${cc}` : undefined,
-          `Message-ID: ${messageId}`,
+          `Message-ID: ${sent.messageId}`,
+          ...sent.notes,
         ]
           .filter(Boolean)
           .join("\n");

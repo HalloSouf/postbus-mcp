@@ -117,3 +117,24 @@ describe("composeMail", () => {
     expect(Buffer.from(decoded, "binary").toString("utf8")).toContain("café");
   });
 });
+
+describe("threading a reply", () => {
+  // Without these headers a reply arrives as a loose message that no mail
+  // client hangs under the conversation, however the subject reads.
+  it("sets In-Reply-To and References when answering", async () => {
+    const mail = await composeMail(ACCOUNT, "client@example.com", "Re: Invoice", "Sure", {
+      inReplyTo: "<parent@example.com>",
+      references: "<parent@example.com>",
+    });
+
+    expect(headersOf(mail.raw)).toContain("In-Reply-To: <parent@example.com>");
+    expect(headersOf(mail.raw)).toContain("References: <parent@example.com>");
+  });
+
+  it("leaves them out of a fresh message", async () => {
+    const mail = await composeMail(ACCOUNT, "client@example.com", "Hello", "Text");
+
+    expect(headersOf(mail.raw)).not.toContain("In-Reply-To");
+    expect(headersOf(mail.raw)).not.toContain("References");
+  });
+});

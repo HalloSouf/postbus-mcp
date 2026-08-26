@@ -135,6 +135,8 @@ function messageHeader(alias: string, message: MessageDetail): string {
     `Folder:     ${message.mailbox}`,
     `Id:         ${message.id}`,
     `ThreadId:   ${message.threadId}`,
+    // Needed to answer this message; without it send_email cannot thread.
+    message.messageId ? `Message-ID: ${message.messageId}` : undefined,
     message.labels?.length ? `Labels:     ${message.labels.join(", ")}` : undefined,
     message.attachments.length
       ? `Attachments: ${message.attachments

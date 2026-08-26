@@ -60,6 +60,8 @@ export async function composeMail(
     cc: options.cc,
     bcc: options.bcc,
     replyTo: options.replyTo,
+    inReplyTo: options.inReplyTo,
+    references: options.references,
     subject,
     messageId,
     ...(options.html ? { html: body } : { text: body }),

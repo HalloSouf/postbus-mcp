@@ -84,6 +84,13 @@ export interface SearchResult {
   notes: string[];
 }
 
+/** What was sent, plus anything that went sideways after it left. */
+export interface SendResult {
+  /** The RFC 5322 Message-ID, which is what a reply threads against. */
+  messageId: string;
+  notes: string[];
+}
+
 export interface SendOptions {
   cc?: string;
   bcc?: string;
@@ -113,7 +120,7 @@ export interface MailProvider<A extends MailAccount = MailAccount> {
     subject: string,
     body: string,
     options?: SendOptions,
-  ): Promise<string>;
+  ): Promise<SendResult>;
 }
 
 /**

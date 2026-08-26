@@ -8,6 +8,7 @@ import {
   type MessageSummary,
   type SearchResult,
   type SendOptions,
+  type SendResult,
 } from "../../types.js";
 import { stripHtml } from "../imap/parse.js";
 import { mapLimit, normalizeDate } from "../../util.js";
@@ -96,8 +97,8 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
     subject: string,
     body: string,
     options: SendOptions = {},
-  ): Promise<string> {
-    const raw = await buildMimeMessage({
+  ): Promise<SendResult> {
+    const built = await buildMimeMessage({
       from: { name: account.displayName, address: account.email },
       to,
       subject,
@@ -110,16 +111,17 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
       references: options.references,
     });
 
-    const response = await call(() =>
+    await call(() =>
       this.client(account).users.messages.send({
         userId: "me",
-        requestBody: { raw: toBase64Url(raw) },
+        requestBody: { raw: toBase64Url(built.raw) },
       }),
     );
 
-    const id = response.data.id;
-    if (!id) throw new PostbusError("Gmail returned no message id after sending.");
-    return id;
+    // Report the RFC 5322 Message-ID, not Gmail's own message id. The IMAP
+    // provider returns the former, both used to be labelled "Message-ID", and
+    // only one of them is what a reply threads against.
+    return { messageId: built.messageId, notes: [] };
   }
 
   private client(account: GmailApiAccount): gmail_v1.Gmail {

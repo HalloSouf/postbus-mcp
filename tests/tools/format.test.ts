@@ -97,6 +97,19 @@ describe("formatAccounts", () => {
   });
 });
 
+describe("message header", () => {
+  // send_email needs this to thread a reply, so it has to be visible.
+  it("shows the Message-ID when there is one", () => {
+    const output = formatMessage("work", { ...DETAIL, messageId: "<abc@example.com>" }, "body");
+
+    expect(output).toContain("Message-ID: <abc@example.com>");
+  });
+
+  it("leaves the line out when the message has none", () => {
+    expect(formatMessage("work", DETAIL, "body")).not.toContain("Message-ID:");
+  });
+});
+
 describe("search notes", () => {
   // parseQuery records what it could not translate, but nothing passed it on,
   // so a dropped date filter looked like a narrower search than it was.
