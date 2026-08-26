@@ -159,6 +159,7 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
           throw new PostbusError(
             "That message is no longer in this mailbox.",
             "Search again with search_emails; it may have been moved or deleted.",
+            "not_found",
           );
         }
 
@@ -240,6 +241,7 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
         throw new PostbusError(
           "No messages found in this conversation.",
           "The threadId comes from search_emails; the messages may have been moved since.",
+          "not_found",
         );
       }
 
@@ -328,6 +330,7 @@ function assertUidValidity(mailbox: MailboxObject, expected: string): void {
   throw new PostbusError(
     "This message id has expired: the mailbox was reindexed.",
     "Search again with search_emails to get a valid id.",
+    "not_found",
   );
 }
 

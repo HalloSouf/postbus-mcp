@@ -1,5 +1,7 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { MAX_BODY_SIZE, TRUST_PROXY } from "../config.js";
+import { getDb } from "../db/index.js";
+import { logEvent } from "../log.js";
 import { requireUser } from "./auth.js";
 import { handleMcpRequest } from "./mcp.js";
 
@@ -10,13 +12,22 @@ export function createApp(): Express {
   if (TRUST_PROXY) app.set("trust proxy", true);
   app.disable("x-powered-by");
 
-  app.use(express.json({ limit: MAX_BODY_SIZE }));
-
+  // A static ok told the healthcheck everything was fine while the volume was
+  // read-only or the database was locked, so Traefik kept sending traffic.
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "postbus-mcp" });
+    try {
+      getDb().prepare("SELECT 1").get();
+      res.json({ status: "ok", service: "postbus-mcp" });
+    } catch (error) {
+      logEvent({ event: "health", ok: false, error: String(error) });
+      res.status(503).json({ status: "unavailable", service: "postbus-mcp" });
+    }
   });
 
-  app.post("/mcp", requireUser, (req, res, next) => {
+  // Body parsing sits behind the token: without that, an unauthenticated
+  // caller could make the server parse a full MAX_BODY_SIZE payload per
+  // request before anything checked who they were.
+  app.post("/mcp", requireUser, express.json({ limit: MAX_BODY_SIZE }), (req, res, next) => {
     handleMcpRequest(req, res, req.postbusUser!).catch(next);
   });
 
@@ -29,7 +40,7 @@ export function createApp(): Express {
   });
 
   app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("[postbus-mcp] unexpected error:", error);
+    logEvent({ event: "request_failed", error: `${error.name}: ${error.message}` });
     if (res.headersSent) return;
 
     res.status(500).json({

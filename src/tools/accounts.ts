@@ -23,7 +23,10 @@ export function registerAccountTools(server: McpServer, context: ToolContext): v
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    () => guard(async () => formatAccounts(listAccounts(context.user.id))),
+    () =>
+      guard("list_accounts", context.user, async () =>
+        formatAccounts(listAccounts(context.user.id)),
+      ),
   );
 
   server.registerTool(
@@ -84,7 +87,7 @@ export function registerAccountTools(server: McpServer, context: ToolContext): v
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     (input) =>
-      guard(async () => {
+      guard("add_mail_account", context.user, async () => {
         const alias = input.alias.trim();
         if (!ALIAS_PATTERN.test(alias)) {
           throw new PostbusError(
@@ -157,7 +160,7 @@ export function registerAccountTools(server: McpServer, context: ToolContext): v
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
     ({ alias }) =>
-      guard(async () => {
+      guard("remove_mail_account", context.user, async () => {
         const removedId = removeAccount(context.user.id, alias);
         if (!removedId) {
           const known = listAccounts(context.user.id).map((a) => a.alias);

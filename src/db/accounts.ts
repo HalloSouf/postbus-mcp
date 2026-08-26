@@ -72,6 +72,7 @@ function toAccount(row: AccountRow): MailAccount {
     throw new PostbusError(
       `Mailbox "${row.alias}" is missing IMAP/SMTP details in the database.`,
       "Remove it with remove_mail_account and add it again.",
+      "config",
     );
   }
 
@@ -109,6 +110,7 @@ export function getAccount(userId: string, alias: string): MailAccount {
       known.length
         ? `Available aliases: ${known.join(", ")}.`
         : "No mailbox linked yet. Use add_mail_account.",
+      "not_found",
     );
   }
 

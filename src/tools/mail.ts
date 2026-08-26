@@ -38,7 +38,7 @@ export function registerMailTools(server: McpServer, context: ToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     ({ account, query, max_results }) =>
-      guard(async () => {
+      guard("search_emails", context.user, async () => {
         const { account: resolved, provider } = resolveAccount(context, account);
         const result = await provider.search(resolved, query ?? "", max_results ?? 10);
 
@@ -69,7 +69,7 @@ export function registerMailTools(server: McpServer, context: ToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     ({ account, message_id, max_body_chars }) =>
-      guard(async () => {
+      guard("get_message", context.user, async () => {
         const { account: resolved, provider } = resolveAccount(context, account);
         const message = await provider.getMessage(resolved, message_id);
         const body = truncate(message.body, max_body_chars ?? DEFAULT_BODY_LIMIT);
@@ -100,7 +100,7 @@ export function registerMailTools(server: McpServer, context: ToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     ({ account, thread_id, max_body_chars }) =>
-      guard(async () => {
+      guard("get_thread", context.user, async () => {
         const { account: resolved, provider } = resolveAccount(context, account);
         const messages = await provider.getThread(resolved, thread_id);
         const bodies = messages.map((message) =>
@@ -133,7 +133,7 @@ export function registerMailTools(server: McpServer, context: ToolContext): void
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     ({ account, to, subject, body, cc, bcc, reply_to, html }) =>
-      guard(async () => {
+      guard("send_email", context.user, async () => {
         const { account: resolved, provider } = resolveAccount(context, account);
         const messageId = await provider.send(resolved, to, subject, body, {
           cc,
