@@ -84,8 +84,8 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
     body: string,
     options: SendOptions = {},
   ): Promise<string> {
-    const raw = buildMimeMessage({
-      from: account.displayName ? `${account.displayName} <${account.email}>` : account.email,
+    const raw = await buildMimeMessage({
+      from: { name: account.displayName, address: account.email },
       to,
       subject,
       body,
@@ -93,6 +93,8 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
       bcc: options.bcc,
       replyTo: options.replyTo,
       html: options.html,
+      inReplyTo: options.inReplyTo,
+      references: options.references,
     });
 
     const response = await call(() =>

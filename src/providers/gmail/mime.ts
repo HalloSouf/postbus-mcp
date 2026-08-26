@@ -1,61 +1,50 @@
-const NON_ASCII = /[^\x20-\x7E]/;
+import MailComposer from "nodemailer/lib/mail-composer/index.js";
 
-export function encodeHeaderText(value: string): string {
-  if (!NON_ASCII.test(value)) return value;
-  return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
-}
-
-export function encodeAddressHeader(value: string): string {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const match = /^(.*?)\s*<([^>]+)>$/.exec(entry);
-      if (!match) return entry;
-      const [, name = "", address = ""] = match;
-      const cleaned = name.replace(/^"|"$/g, "").trim();
-      if (!cleaned) return `<${address}>`;
-      return `${encodeHeaderText(cleaned)} <${address}>`;
-    })
-    .join(", ");
+export interface MimeAddress {
+  name?: string | undefined;
+  address: string;
 }
 
 export interface MimeMessage {
-  from: string;
+  from: MimeAddress;
   to: string;
   subject: string;
   body: string;
-  cc?: string;
-  bcc?: string;
-  replyTo?: string;
-  html?: boolean;
+  cc?: string | undefined;
+  bcc?: string | undefined;
+  replyTo?: string | undefined;
+  html?: boolean | undefined;
+  inReplyTo?: string | undefined;
+  references?: string | undefined;
 }
 
-export function buildMimeMessage(message: MimeMessage): string {
-  const headers: string[] = [
-    `From: ${encodeAddressHeader(message.from)}`,
-    `To: ${encodeAddressHeader(message.to)}`,
-  ];
+// Composed by nodemailer, exactly like the IMAP/SMTP path: it parses addresses
+// with quotes and commas correctly, folds long headers, encodes non-ASCII per
+// RFC 2047 and strips CR/LF from every value. Hand-rolling this let a recipient
+// containing "\r\nBcc: ..." inject its own headers.
+export async function buildMimeMessage(message: MimeMessage): Promise<Buffer> {
+  const composer = new MailComposer({
+    from: message.from.name
+      ? { name: message.from.name, address: message.from.address }
+      : message.from.address,
+    to: message.to,
+    cc: message.cc,
+    bcc: message.bcc,
+    replyTo: message.replyTo,
+    inReplyTo: message.inReplyTo,
+    references: message.references,
+    subject: message.subject,
+    ...(message.html ? { html: message.body } : { text: message.body }),
+  });
 
-  if (message.cc) headers.push(`Cc: ${encodeAddressHeader(message.cc)}`);
-  if (message.bcc) headers.push(`Bcc: ${encodeAddressHeader(message.bcc)}`);
-  if (message.replyTo) headers.push(`Reply-To: ${encodeAddressHeader(message.replyTo)}`);
+  const node = composer.compile();
+  // Unlike SMTP there is no envelope here, so Bcc has to travel in the headers.
+  // Gmail delivers to those recipients and drops the header itself.
+  node.keepBcc = true;
 
-  headers.push(`Subject: ${encodeHeaderText(message.subject)}`);
-  headers.push("MIME-Version: 1.0");
-  headers.push(`Content-Type: text/${message.html ? "html" : "plain"}; charset="UTF-8"`);
-  headers.push("Content-Transfer-Encoding: base64");
-
-  const encodedBody = (
-    Buffer.from(message.body, "utf8")
-      .toString("base64")
-      .match(/.{1,76}/g) ?? []
-  ).join("\r\n");
-
-  return `${headers.join("\r\n")}\r\n\r\n${encodedBody}\r\n`;
+  return node.build();
 }
 
-export function toBase64Url(value: string): string {
-  return Buffer.from(value, "utf8").toString("base64url");
+export function toBase64Url(value: Buffer): string {
+  return value.toString("base64url");
 }

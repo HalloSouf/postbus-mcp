@@ -82,6 +82,9 @@ export interface SendOptions {
   bcc?: string;
   replyTo?: string;
   html?: boolean;
+  /** Message-ID of the message being answered, so clients thread the reply. */
+  inReplyTo?: string;
+  references?: string;
 }
 
 // Providers receive a fully resolved account. Alias lookup happens in the tool
@@ -106,12 +109,23 @@ export interface MailProvider<A extends MailAccount = MailAccount> {
   ): Promise<string>;
 }
 
+/**
+ * What kind of problem this is. The tool layer turns it into advice for the
+ * model ("retry" vs "call list_accounts" vs "tell the operator").
+ */
+export type ErrorKind =
+  "not_found" | "invalid_input" | "auth" | "transient" | "upstream" | "config" | "internal";
+
 export class PostbusError extends Error {
+  readonly kind: ErrorKind;
+
   constructor(
     message: string,
     readonly hint?: string,
+    kind: ErrorKind = "invalid_input",
   ) {
     super(message);
     this.name = "PostbusError";
+    this.kind = kind;
   }
 }
