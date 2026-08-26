@@ -285,7 +285,7 @@ conversation too.
 ```yaml
 services:
   postbus:
-    build: .
+    image: ghcr.io/hallosouf/postbus-mcp:${IMAGE_TAG:?pin a published tag}
     restart: unless-stopped
     environment:
       MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY in .env}
@@ -310,20 +310,50 @@ Things to watch:
 - The `proxy` network has to exist (`docker network create proxy`) and Traefik
   has to be on it.
 - The container publishes no port of its own: only Traefik can reach it.
-- `TRUST_PROXY=true` lets Express trust the `X-Forwarded-*` headers.
+- `TRUST_PROXY=true` lets Express trust the `X-Forwarded-*` headers. It is off
+  by default: only turn it on when something like Traefik really is in front,
+  because otherwise any client can claim any address.
+- `IMAGE_TAG` has no default. CI publishes `sha-<short>` for every push to
+  `main`; pin one of those so a rollback is a tag change instead of a rebuild
+  on the server.
 - Terminate TLS at Traefik. Tokens travel as bearer credentials; without HTTPS
   they are in the clear.
 - The `postbus-data` volume holds the database with every encrypted app
-  password. Back it up together with the `MASTER_KEY` — stored separately.
+  password. See below for how to back it up.
+
+### Backups
+
+The database runs in WAL mode, so copying the file out of a running container
+can catch it mid-transaction. Ask SQLite for a consistent copy instead:
+
+```bash
+docker compose exec postbus \
+  node -e "require('better-sqlite3')(process.env.DATABASE_PATH).backup('/data/backup.db')"
+
+docker compose cp postbus:/data/backup.db ./postbus-$(date +%F).db
+```
+
+Keep the `MASTER_KEY` somewhere else. The backup is useless without it, and
+together they are a complete copy of everyone's mailbox credentials.
+
+To restore, stop the container, put the file back as `/data/postbus.db` (delete
+any `-wal` and `-shm` next to it), and start with the same `MASTER_KEY`.
+
+Note that the server refuses to open a database whose schema is newer than the
+build — rolling the image back further than the database will fail loudly
+rather than corrupt anything.
 
 ---
 
 ## Security
 
 **MASTER_KEY.** App passwords and refresh tokens are stored with AES-256-GCM,
-each with its own IV. The server refuses to start without the key. Lose it and
-everyone has to link their mailboxes again, so keep it apart from the database
-backup.
+each with its own IV, and sealed against the row they belong to — a ciphertext
+moved to another user's row will not decrypt. The key must be 64 hex characters
+(`openssl rand -hex 32`); a passphrase is not accepted, because stretching one
+against a salt baked into the source would be the same salt in every install.
+The server refuses to start without the key. Lose it and everyone has to link
+their mailboxes again, so keep it apart from the database backup.
 
 **Tokens.** Only the SHA-256 hash is stored. Share them over a channel you
 trust and rotate when in doubt (`npm run rotate-token`).
@@ -332,9 +362,27 @@ trust and rotate when in doubt (`npm run rotate-token`).
 server is built per request around a single user, so there is no session store
 that could mix people up.
 
-**What this is not.** No rate limiting, no audit log, no fine-grained
-permissions. This is built for a handful of people you know, behind TLS. Do not
-open it up to an unknown audience.
+**Transport.** IMAP and SMTP connections on a plain port demand STARTTLS
+instead of falling back to cleartext when a server does not offer it, which is
+what a downgrade attack arranges. Loopback is exempt, for local bridges such as
+Proton Mail Bridge.
+
+**Rate limiting.** 60 tool calls per token per minute
+(`RATE_LIMIT_PER_MINUTE`), and at most 20 linked mailboxes per user
+(`MAX_ACCOUNTS_PER_USER`).
+
+**Logging.** One JSON line per tool call on stdout: tool, user id, duration,
+outcome and error kind. Never mail content, addresses or search queries.
+
+**Untrusted content.** Message bodies and snippets reach the model inside
+explicit markers saying they are data. That is a mitigation, not a fix: a
+message can still try to talk the model into sending mail, which is why
+`send_email` is marked destructive so clients ask before calling it. Treat
+anything a mailbox returns as attacker-controlled.
+
+**What this is not.** No fine-grained permissions, and no audit trail beyond
+the log line above. This is built for a handful of people you know, behind TLS.
+Do not open it up to an unknown audience.
 
 ---
 
@@ -439,7 +487,8 @@ The tests in `tests/` run in half a second and touch nothing outside the
 process: SQLite runs in memory and no connection leaves the machine. They cover
 the logic that can go wrong quietly — search query translation, encoding message
 and thread ids, parsing and composing MIME, encrypted storage, the separation
-between users, and the bearer middleware.
+between users, the bearer middleware, the rate limiter, and the header
+injection and content-fencing defences.
 
 What they do _not_ cover is talking to a real mail server. For that, run
 [GreenMail](https://greenmail-mail-test.github.io/greenmail/) locally:
@@ -461,19 +510,22 @@ Then link a mailbox with `imap_host: 127.0.0.1`, `imap_port: 3143`,
 GitHub Actions runs the same checks on every push and pull request: formatting,
 types, `npm audit` over the production dependencies, the tests, and a docker
 build that boots the container and verifies that `/health` answers and `/mcp`
-returns 401 without a token. CI and the container both run Node 24, the current
-LTS.
+returns 401 without a token. A push to `main` publishes the image it just
+tested to GHCR as `sha-<short>`. CI and the container both run Node 24.
 
 ### Project layout
 
 ```
 src/
-├── index.ts              startup: check MASTER_KEY, open the db, listen
-├── config.ts             environment configuration
+├── index.ts              entry point: turns a startup failure into a message
+├── main.ts               startup: check MASTER_KEY, open the db, listen
+├── config.ts             environment configuration, validated with zod
 ├── crypto.ts             AES-256-GCM for secrets, hashing for tokens
+├── net.ts                which mail hosts we are willing to connect to
+├── log.ts                one JSON line per event, on stdout
 ├── types.ts              MailProvider plus every shared type
 ├── db/                   SQLite: migrations, users, mail_accounts
-├── http/                 Express app, bearer auth, MCP transport per request
+├── http/                 Express app, bearer auth, rate limit, MCP transport
 ├── providers/
 │   ├── registry.ts       account -> provider
 │   ├── imap/             IMAP/SMTP: connections, search, threading, sending
