@@ -1,0 +1,286 @@
+import { ImapFlow, type FetchQueryObject, type MailboxObject, type SearchObject } from "imapflow";
+import { MAIL_TIMEOUT_MS } from "../../config.js";
+import {
+  PostbusError,
+  type ImapAccount,
+  type MailProvider,
+  type MessageDetail,
+  type MessageSummary,
+  type SendOptions,
+} from "../../types.js";
+import {
+  resolveMailbox,
+  threadMailboxes,
+  translateImapError,
+  withImap,
+  type ImapContext,
+} from "./connection.js";
+import { decodeMessageId, decodeThreadId } from "./ids.js";
+import { hasAttachments, makeSnippetFromSource, toDetail, toSummary } from "./parse.js";
+import { parseQuery, type MailboxHint } from "./query.js";
+import { composeMail, sendComposed, verifySmtp } from "./smtp.js";
+
+const SNIPPET_BYTES = 4096;
+
+const MAX_THREAD_MESSAGES = 50;
+
+// Gmail servers get X-GM-RAW search and X-GM-THRID threading; every other
+// server gets translated criteria and References-based threads.
+export class ImapSmtpProvider implements MailProvider<ImapAccount> {
+  readonly id = "imap" as const;
+
+  async verify(account: ImapAccount): Promise<void> {
+    const client = new ImapFlow({
+      host: account.imapHost,
+      port: account.imapPort,
+      secure: account.imapSecure,
+      auth: { user: account.username, pass: account.password },
+      logger: false,
+      verifyOnly: true,
+      connectionTimeout: MAIL_TIMEOUT_MS,
+      greetingTimeout: MAIL_TIMEOUT_MS,
+      socketTimeout: MAIL_TIMEOUT_MS,
+      clientInfo: { name: "postbus-mcp" },
+    });
+
+    try {
+      await client.connect();
+    } catch (error) {
+      throw translateImapError(error);
+    } finally {
+      client.close();
+    }
+
+    await verifySmtp(account);
+  }
+
+  async search(account: ImapAccount, query: string, maxResults: number): Promise<MessageSummary[]> {
+    const parsed = parseQuery(query);
+    const limit = Math.min(Math.max(1, maxResults), 100);
+
+    return withImap(account, async (context) => {
+      const path = await pickSearchMailbox(account.id, context, parsed.mailbox, query);
+      const lock = await context.client.getMailboxLock(path);
+
+      try {
+        const mailbox = requireMailbox(context.client.mailbox, path);
+        const criteria: SearchObject =
+          context.gmail && parsed.raw ? { gmraw: parsed.raw } : parsed.criteria;
+
+        const uids = (await context.client.search(criteria, { uid: true })) || [];
+        if (uids.length === 0) return [];
+
+        // IMAP cannot search on attachments, so fetch extra and filter after.
+        const overshoot = parsed.requireAttachments && !context.gmail ? 4 : 1;
+        const selected = uids.slice(-Math.min(uids.length, limit * overshoot)).reverse();
+
+        const messages = await context.client.fetchAll(
+          selected,
+          fetchQuery(context, { source: { maxLength: SNIPPET_BYTES } }),
+          { uid: true },
+        );
+
+        const byUid = new Map(messages.map((message) => [message.uid, message]));
+        const summaries: MessageSummary[] = [];
+
+        for (const uid of selected) {
+          const message = byUid.get(uid);
+          if (!message) continue;
+
+          if (parsed.requireAttachments && !hasAttachments(message.bodyStructure)) continue;
+
+          summaries.push(
+            toSummary(
+              message,
+              { mailbox: path, uidValidity: String(mailbox.uidValidity) },
+              await makeSnippetFromSource(message.source),
+            ),
+          );
+
+          if (summaries.length >= limit) break;
+        }
+
+        return summaries;
+      } finally {
+        lock.release();
+      }
+    });
+  }
+
+  async getMessage(account: ImapAccount, messageId: string): Promise<MessageDetail> {
+    const ref = decodeMessageId(messageId);
+
+    return withImap(account, async (context) => {
+      const lock = await context.client.getMailboxLock(ref.mailbox);
+
+      try {
+        const mailbox = requireMailbox(context.client.mailbox, ref.mailbox);
+        assertUidValidity(mailbox, ref.uidValidity);
+
+        const message = await context.client.fetchOne(
+          String(ref.uid),
+          fetchQuery(context, { source: true }),
+          { uid: true },
+        );
+
+        if (!message || !message.source) {
+          throw new PostbusError(
+            "That message is no longer in this mailbox.",
+            "Search again with search_emails; it may have been moved or deleted.",
+          );
+        }
+
+        return toDetail(
+          message,
+          { mailbox: ref.mailbox, uidValidity: String(mailbox.uidValidity) },
+          message.source,
+        );
+      } finally {
+        lock.release();
+      }
+    });
+  }
+
+  async getThread(account: ImapAccount, threadId: string): Promise<MessageDetail[]> {
+    const ref = decodeThreadId(threadId);
+
+    return withImap(account, async (context) => {
+      if (ref.kind === "server" && !context.serverThreads) {
+        throw new PostbusError(
+          "This server does not hand out thread ids.",
+          "Search again with search_emails and use the threadId from those results.",
+        );
+      }
+
+      const criteria: SearchObject =
+        ref.kind === "server"
+          ? { threadId: ref.id }
+          : {
+              or: [
+                { header: { "message-id": ref.rootMessageId } },
+                { header: { references: ref.rootMessageId } },
+                { header: { "in-reply-to": ref.rootMessageId } },
+              ],
+            };
+
+      const mailboxes = await threadMailboxes(account.id, context);
+      const details: MessageDetail[] = [];
+
+      for (const path of mailboxes) {
+        if (details.length >= MAX_THREAD_MESSAGES) break;
+
+        const lock = await context.client.getMailboxLock(path);
+        try {
+          const mailbox = requireMailbox(context.client.mailbox, path);
+          const uids = (await context.client.search(criteria, { uid: true })) || [];
+          if (uids.length === 0) continue;
+
+          const wanted = uids.slice(-(MAX_THREAD_MESSAGES - details.length));
+          const messages = await context.client.fetchAll(
+            wanted,
+            fetchQuery(context, { source: true }),
+            { uid: true },
+          );
+
+          for (const message of messages) {
+            if (!message.source) continue;
+            details.push(
+              await toDetail(
+                message,
+                { mailbox: path, uidValidity: String(mailbox.uidValidity) },
+                message.source,
+              ),
+            );
+          }
+        } finally {
+          lock.release();
+        }
+      }
+
+      if (details.length === 0) {
+        throw new PostbusError(
+          "No messages found in this conversation.",
+          "The threadId comes from search_emails; the messages may have been moved since.",
+        );
+      }
+
+      return dedupe(details).sort((a, b) => a.date.localeCompare(b.date));
+    });
+  }
+
+  async send(
+    account: ImapAccount,
+    to: string,
+    subject: string,
+    body: string,
+    options: SendOptions = {},
+  ): Promise<string> {
+    const mail = await composeMail(account, to, subject, body, options);
+    await sendComposed(account, mail);
+
+    await withImap(account, async (context) => {
+      // Gmail stores its own copy in Sent; other servers expect us to.
+      if (context.gmail) return;
+
+      const sent = await resolveMailbox(account.id, context, "sent");
+      if (!sent) return;
+
+      await context.client.append(sent, mail.raw, ["\\Seen"]);
+      // The message is out; a failed copy must not undo that.
+    }).catch(() => {});
+
+    return mail.messageId;
+  }
+}
+
+function fetchQuery(context: ImapContext, extra: Partial<FetchQueryObject>): FetchQueryObject {
+  return {
+    uid: true,
+    flags: true,
+    envelope: true,
+    bodyStructure: true,
+    internalDate: true,
+    size: true,
+    threadId: context.serverThreads,
+    labels: context.gmail,
+    headers: context.serverThreads ? false : ["message-id", "references", "in-reply-to"],
+    ...extra,
+  };
+}
+
+async function pickSearchMailbox(
+  accountId: string,
+  context: ImapContext,
+  hint: MailboxHint | undefined,
+  query: string,
+): Promise<string> {
+  const wanted = hint ?? (context.gmail && /\b(in|label):/i.test(query) ? "all" : "inbox");
+  return (await resolveMailbox(accountId, context, wanted)) ?? "INBOX";
+}
+
+function requireMailbox(mailbox: MailboxObject | false, path: string): MailboxObject {
+  if (!mailbox) throw new PostbusError(`Could not open mailbox "${path}".`);
+  return mailbox;
+}
+
+// A changed UIDVALIDITY means old uids point at different messages now.
+function assertUidValidity(mailbox: MailboxObject, expected: string): void {
+  if (String(mailbox.uidValidity) === expected) return;
+
+  throw new PostbusError(
+    "This message id has expired: the mailbox was reindexed.",
+    "Search again with search_emails to get a valid id.",
+  );
+}
+
+// The same message can sit in both Inbox and Sent.
+function dedupe(messages: MessageDetail[]): MessageDetail[] {
+  const seen = new Set<string>();
+
+  return messages.filter((message) => {
+    const key = message.messageId ?? message.id;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}

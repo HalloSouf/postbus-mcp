@@ -1,0 +1,51 @@
+# Example deployment behind Traefik.
+#   1. cp .env.example .env  (set MASTER_KEY and PUBLIC_HOST)
+#   2. docker compose up -d --build
+#   3. docker compose exec postbus node dist/cli/add-user.js "Name"
+# Without Traefik: drop the labels and uncomment `ports`.
+
+services:
+  postbus:
+    build: .
+    image: postbus-mcp:latest
+    container_name: postbus-mcp
+    restart: unless-stopped
+
+    environment:
+      MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY in .env (openssl rand -hex 32)}
+      DATABASE_PATH: /data/postbus.db
+      PORT: "3000"
+      HOST: 0.0.0.0
+      TRUST_PROXY: "true"
+      MAIL_TIMEOUT_MS: "30000"
+
+      # Optional: Gmail API provider (OAuth).
+      # GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      # GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+
+    volumes:
+      # SQLite database with the encrypted app passwords.
+      - postbus-data:/data
+
+    # Without a reverse proxy, publish the port yourself.
+    # ports:
+    #   - "3000:3000"
+
+    networks:
+      - proxy
+
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: proxy
+      traefik.http.routers.postbus.rule: Host(`${PUBLIC_HOST:-mcp.example.com}`)
+      traefik.http.routers.postbus.entrypoints: websecure
+      traefik.http.routers.postbus.tls: "true"
+      traefik.http.routers.postbus.tls.certresolver: letsencrypt
+      traefik.http.services.postbus.loadbalancer.server.port: "3000"
+
+volumes:
+  postbus-data:
+
+networks:
+  proxy:
+    external: true

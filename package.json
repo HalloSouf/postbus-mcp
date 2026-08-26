@@ -1,0 +1,69 @@
+{
+  "name": "postbus-mcp",
+  "version": "0.2.0",
+  "description": "Self-hosted, multi-tenant MCP server voor het beheren van meerdere mailboxen (IMAP/SMTP, optioneel Gmail API) vanuit Claude en andere MCP-clients.",
+  "license": "MIT",
+  "author": "HalloSouf",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "postbus-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run clean && tsc",
+    "clean": "node --eval \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "format": "prettier --write \"**/*.{ts,json,yml,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,json,yml,md}\"",
+    "add-user": "tsx src/cli/add-user.ts",
+    "list-users": "tsx src/cli/list-users.ts",
+    "rotate-token": "tsx src/cli/rotate-token.ts",
+    "remove-user": "tsx src/cli/remove-user.ts",
+    "link-gmail": "tsx src/cli/link-gmail.ts"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "imap",
+    "smtp",
+    "email",
+    "gmail",
+    "claude",
+    "self-hosted"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "googleapis": "^176.0.0",
+    "imapflow": "^1.7.6",
+    "mailparser": "^3.9.16",
+    "nodemailer": "^9.0.5",
+    "open": "^10.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^22.5.0",
+    "@types/nodemailer": "^8.0.1",
+    "prettier": "^3.9.6",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.11"
+  }
+}

@@ -1,0 +1,16 @@
+node_modules
+dist
+data
+.git
+.github
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
+*.log
+tests
+vitest.config.ts
+tsconfig.test.json
+README.md
+CONTRIBUTING.md

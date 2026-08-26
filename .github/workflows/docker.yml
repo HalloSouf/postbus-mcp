@@ -1,0 +1,79 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Build the image and try it
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t postbus-mcp:ci .
+
+      # The unit tests never touch the container, so check the whole thing
+      # actually boots: native module built, database created, HTTP reachable.
+      - name: Start the container
+        run: |
+          docker run -d --name postbus-ci \
+            -e MASTER_KEY="$(openssl rand -hex 32)" \
+            -p 3000:3000 \
+            postbus-mcp:ci
+
+      - name: Wait for the healthcheck
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3000/health > /dev/null; then
+              echo "server is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server never came up:"
+          docker logs postbus-ci
+          exit 1
+
+      - name: Run an admin script inside the container
+        run: docker exec postbus-ci node dist/cli/add-user.js "CI" | grep -q "pb_"
+
+      - name: MCP endpoint requires a token
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/mcp \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
+
+          if [ "$status" != "401" ]; then
+            echo "expected 401 without a token, got $status"
+            exit 1
+          fi
+
+      - name: Server refuses to start without MASTER_KEY
+        run: |
+          if docker run --rm postbus-mcp:ci 2>&1 | grep -q "MASTER_KEY is missing"; then
+            echo "refused to start, as expected"
+          else
+            echo "server should have refused to start without MASTER_KEY"
+            exit 1
+          fi
+
+      - name: Logs on failure
+        if: failure()
+        run: docker logs postbus-ci || true
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f postbus-ci || true
