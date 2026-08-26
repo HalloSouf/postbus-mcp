@@ -1,13 +1,18 @@
 # Example deployment behind Traefik.
-#   1. cp .env.example .env  (set MASTER_KEY and PUBLIC_HOST)
-#   2. docker compose up -d --build
+#   1. cp .env.example .env  (set MASTER_KEY, PUBLIC_HOST and IMAGE_TAG)
+#   2. docker compose up -d
 #   3. docker compose exec postbus node dist/cli/add-user.js "Name"
 # Without Traefik: drop the labels and uncomment `ports`.
+#
+# CI publishes ghcr.io/<owner>/<repo>:sha-<short> on every push to main. Pin
+# IMAGE_TAG to one of those: it names exactly one build, so a rollback is a
+# tag change rather than a rebuild, and the server never compiles
+# better-sqlite3 from source. `build: .` is here for local work only.
 
 services:
   postbus:
+    image: ${POSTBUS_IMAGE:-ghcr.io/hallosouf/postbus-mcp}:${IMAGE_TAG:?pin a sha-xxxxxxx tag published by CI}
     build: .
-    image: postbus-mcp:latest
     container_name: postbus-mcp
     restart: unless-stopped
 
@@ -18,6 +23,8 @@ services:
       HOST: 0.0.0.0
       TRUST_PROXY: "true"
       MAIL_TIMEOUT_MS: "30000"
+      MAX_MESSAGE_BYTES: "2097152"
+      RATE_LIMIT_PER_MINUTE: "60"
 
       # Optional: Gmail API provider (OAuth).
       # GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
