@@ -284,3 +284,17 @@ describe("secret binding", () => {
     expect((getAccount(user.id, "work") as ImapAccount).password).toBe("new-password");
   });
 });
+
+describe("unknown providers", () => {
+  // The column is text. Casting it meant anything unrecognised was treated as
+  // IMAP and then failed with a misleading "missing IMAP/SMTP details".
+  it("refuses a provider this build does not know, and says so", () => {
+    const { user } = createUser("Soufiane");
+    addMailbox(user.id, "work", "souf@example.com");
+
+    getDb().prepare("UPDATE mail_accounts SET provider = 'jmap'").run();
+
+    expect(() => getAccount(user.id, "work")).toThrow(/does not know/);
+    expect(() => listAccounts(user.id)).toThrow(/does not know/);
+  });
+});

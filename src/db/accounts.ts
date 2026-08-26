@@ -1,5 +1,6 @@
 import { decryptSecret, encryptSecret } from "../crypto.js";
-import { PostbusError, type AccountInfo, type MailAccount, type ProviderId } from "../types.js";
+import { parseProviderId } from "../providers/registry.js";
+import { PostbusError, type AccountInfo, type MailAccount } from "../types.js";
 import { getDb } from "./index.js";
 import { newId } from "./users.js";
 
@@ -26,17 +27,24 @@ const SELECT = `SELECT id, user_id, alias, email, provider, display_name,
                        username, encrypted_password, created_at
                 FROM mail_accounts`;
 
+// Anything that is not IMAP used to be labelled "Gmail API", so a third
+// provider would have introduced itself as Gmail in list_accounts.
+function describeServer(row: AccountRow): string {
+  if (row.provider === "imap") {
+    return row.imap_host ? `${row.imap_host}:${row.imap_port ?? 993}` : "IMAP";
+  }
+
+  return row.provider === "gmail-api" ? "Gmail API" : row.provider;
+}
+
 function toInfo(row: AccountRow): AccountInfo {
   return {
     alias: row.alias,
     email: row.email,
-    provider: row.provider as ProviderId,
+    provider: parseProviderId(row.provider),
     displayName: row.display_name ?? undefined,
     createdAt: row.created_at,
-    server:
-      row.provider === "imap" && row.imap_host
-        ? `${row.imap_host}:${row.imap_port ?? 993}`
-        : "Gmail API",
+    server: describeServer(row),
   };
 }
 
@@ -51,6 +59,7 @@ function secretContext(userId: string, accountId: string): string {
 
 // The only place secrets are decrypted.
 function toAccount(row: AccountRow): MailAccount {
+  const provider = parseProviderId(row.provider);
   const base = {
     id: row.id,
     userId: row.user_id,
@@ -60,7 +69,7 @@ function toAccount(row: AccountRow): MailAccount {
     createdAt: row.created_at,
   };
 
-  if (row.provider === "gmail-api") {
+  if (provider === "gmail-api") {
     return {
       ...base,
       provider: "gmail-api",
