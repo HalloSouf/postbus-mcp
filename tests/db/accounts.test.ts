@@ -215,3 +215,40 @@ describe("mailbox storage", () => {
     }
   });
 });
+
+describe("alias collation", () => {
+  // The UNIQUE index used to compare binary while every lookup used NOCASE, so
+  // "Work" and "work" became two rows that the rest of the code saw as one.
+  it("treats a differently cased alias as the same mailbox", () => {
+    const { user } = createUser("Soufiane");
+
+    addMailbox(user.id, "Work", "first@example.com");
+    addMailbox(user.id, "work", "second@example.com");
+
+    expect(listAccounts(user.id)).toHaveLength(1);
+    expect(getAccount(user.id, "WORK").email).toBe("second@example.com");
+    expect(accountExists(user.id, "wOrK")).toBe(true);
+  });
+
+  it("removes the mailbox once and reports the id it removed", () => {
+    const { user } = createUser("Soufiane");
+    addMailbox(user.id, "Work", "first@example.com");
+
+    const removed = removeAccount(user.id, "work");
+
+    expect(removed).toBeDefined();
+    expect(listAccounts(user.id)).toHaveLength(0);
+    expect(removeAccount(user.id, "work")).toBeUndefined();
+  });
+
+  it("keeps different aliases apart", () => {
+    const { user } = createUser("Soufiane");
+
+    addMailbox(user.id, "work", "first@example.com");
+    addMailbox(user.id, "personal", "second@example.com");
+
+    expect(listAccounts(user.id)).toHaveLength(2);
+    removeAccount(user.id, "work");
+    expect(listAccounts(user.id).map((a) => a.alias)).toEqual(["personal"]);
+  });
+});

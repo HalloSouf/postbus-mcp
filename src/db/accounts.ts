@@ -86,9 +86,7 @@ export function listAccounts(userId: string): AccountInfo[] {
 // user_id is part of the query: someone else's alias simply does not exist here.
 export function getAccount(userId: string, alias: string): MailAccount {
   const row = getDb()
-    .prepare<[string, string], AccountRow>(
-      `${SELECT} WHERE user_id = ? AND alias = ? COLLATE NOCASE`,
-    )
+    .prepare<[string, string], AccountRow>(`${SELECT} WHERE user_id = ? AND alias = ?`)
     .get(userId, alias.trim());
 
   if (!row) {
@@ -108,7 +106,7 @@ export function accountExists(userId: string, alias: string): boolean {
   return (
     (getDb()
       .prepare<[string, string], { count: number }>(
-        `SELECT COUNT(*) AS count FROM mail_accounts WHERE user_id = ? AND alias = ? COLLATE NOCASE`,
+        `SELECT COUNT(*) AS count FROM mail_accounts WHERE user_id = ? AND alias = ?`,
       )
       .get(userId, alias.trim())?.count ?? 0) > 0
   );
@@ -182,14 +180,23 @@ export function saveGmailApiAccount(input: NewGmailApiAccount): AccountInfo {
   return toInfo(row);
 }
 
+// Delete by primary key. A DELETE ... RETURNING read with .get() removes every
+// matching row but reports only the first, so the caller could not clean up
+// after the ones it never heard about.
 export function removeAccount(userId: string, alias: string): string | undefined {
-  const row = getDb()
-    .prepare<[string, string], { id: string }>(
-      `DELETE FROM mail_accounts WHERE user_id = ? AND alias = ? COLLATE NOCASE RETURNING id`,
-    )
-    .get(userId, alias.trim());
+  const id = findAccountId(userId, alias);
+  if (!id) return undefined;
 
-  return row?.id;
+  getDb().prepare(`DELETE FROM mail_accounts WHERE id = ?`).run(id);
+  return id;
+}
+
+export function findAccountId(userId: string, alias: string): string | undefined {
+  return getDb()
+    .prepare<[string, string], { id: string }>(
+      `SELECT id FROM mail_accounts WHERE user_id = ? AND alias = ?`,
+    )
+    .get(userId, alias.trim())?.id;
 }
 
 function upsert(row: AccountRow): void {
