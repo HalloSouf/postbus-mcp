@@ -12,7 +12,6 @@ import {
   type ImapAccount,
   type MailProvider,
   type MessageDetail,
-  type MessageSummary,
   type SearchResult,
   type SendOptions,
   type SendResult,
