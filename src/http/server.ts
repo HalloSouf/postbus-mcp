@@ -4,6 +4,7 @@ import { getDb } from "../db/index.js";
 import { logEvent } from "../log.js";
 import { requireUser } from "./auth.js";
 import { handleMcpRequest } from "./mcp.js";
+import { rateLimit } from "./rate-limit.js";
 
 export function createApp(): Express {
   const app = express();
@@ -27,9 +28,15 @@ export function createApp(): Express {
   // Body parsing sits behind the token: without that, an unauthenticated
   // caller could make the server parse a full MAX_BODY_SIZE payload per
   // request before anything checked who they were.
-  app.post("/mcp", requireUser, express.json({ limit: MAX_BODY_SIZE }), (req, res, next) => {
-    handleMcpRequest(req, res, req.postbusUser!).catch(next);
-  });
+  app.post(
+    "/mcp",
+    requireUser,
+    rateLimit,
+    express.json({ limit: MAX_BODY_SIZE }),
+    (req, res, next) => {
+      handleMcpRequest(req, res, req.postbusUser!).catch(next);
+    },
+  );
 
   // Stateless: there is no server-initiated stream to attach to.
   app.get("/mcp", requireUser, (_req, res) => methodNotAllowed(res));

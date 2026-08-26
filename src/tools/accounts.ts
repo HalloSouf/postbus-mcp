@@ -4,6 +4,7 @@ import { accountExists, listAccounts, removeAccount, saveImapAccount } from "../
 import { ImapSmtpProvider } from "../providers/imap/provider.js";
 import { findPreset } from "../providers/imap/presets.js";
 import { release } from "../providers/imap/connection.js";
+import { MAX_ACCOUNTS_PER_USER } from "../config.js";
 import { assertMailHostAllowed, isLoopbackHost } from "../net.js";
 import { PostbusError, type ImapAccount } from "../types.js";
 import type { ToolContext } from "./context.js";
@@ -98,7 +99,15 @@ export function registerAccountTools(server: McpServer, context: ToolContext): v
 
         const settings = resolveSettings(input);
         await assertMailTargetAllowed(settings);
+
         const replaced = accountExists(context.user.id, alias);
+        if (!replaced && listAccounts(context.user.id).length >= MAX_ACCOUNTS_PER_USER) {
+          throw new PostbusError(
+            `You already have the maximum of ${MAX_ACCOUNTS_PER_USER} linked mailboxes.`,
+            "Unlink one with remove_mail_account first.",
+            "invalid_input",
+          );
+        }
 
         // Verify first, store second: a broken mailbox helps nobody.
         const candidate: ImapAccount = {
