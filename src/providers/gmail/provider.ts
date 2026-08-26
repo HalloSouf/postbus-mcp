@@ -9,6 +9,7 @@ import {
   type SearchResult,
   type SendOptions,
 } from "../../types.js";
+import { stripHtml } from "../imap/parse.js";
 import { mapLimit, normalizeDate } from "../../util.js";
 import { createClientForRefreshToken } from "./auth.js";
 import { buildMimeMessage, toBase64Url } from "./mime.js";
@@ -30,8 +31,10 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
     const gmail = this.client(account);
     const limit = Math.min(Math.max(1, maxResults), 100);
 
+    // Without q Gmail returns everything it has — archived, sent, drafts —
+    // while the tool promises "the newest messages in the inbox".
     const list = await call(() =>
-      gmail.users.messages.list({ userId: "me", q: query || undefined, maxResults: limit }),
+      gmail.users.messages.list({ userId: "me", q: query || "in:inbox", maxResults: limit }),
     );
 
     const refs = list.data.messages ?? [];
@@ -72,10 +75,19 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
       throw new PostbusError("No messages found in this conversation.");
     }
 
-    return messages
-      .slice(0, MAX_THREAD_MESSAGES)
-      .map(toDetail)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    // Keep the tail, not the head: the IMAP provider keeps the newest and the
+    // recent half of a long conversation is the half anyone asks about.
+    const kept = messages.slice(-MAX_THREAD_MESSAGES).map(toDetail);
+    const ordered = kept.sort((a, b) => a.date.localeCompare(b.date));
+
+    if (messages.length > kept.length && ordered[0]) {
+      ordered[0] = {
+        ...ordered[0],
+        body: `[… only the ${ordered.length} most recent messages in this conversation are shown]\n\n${ordered[0].body}`,
+      };
+    }
+
+    return ordered;
   }
 
   async send(
@@ -154,7 +166,7 @@ function header(
   return found?.value ?? undefined;
 }
 
-function toSummary(message: gmail_v1.Schema$Message): MessageSummary {
+export function toSummary(message: gmail_v1.Schema$Message): MessageSummary {
   const labels = message.labelIds ?? [];
 
   return {
@@ -167,12 +179,28 @@ function toSummary(message: gmail_v1.Schema$Message): MessageSummary {
     snippet: decodeEntities(message.snippet ?? ""),
     unread: labels.includes("UNREAD"),
     hasAttachments: collectAttachments(message.payload).length > 0,
-    mailbox: labels.includes("SENT") ? "SENT" : "INBOX",
+    mailbox: gmailFolder(labels),
     labels,
   };
 }
 
-function toDetail(message: gmail_v1.Schema$Message): MessageDetail {
+// Gmail has labels, not folders. Reporting everything without a SENT label as
+// "INBOX" told the model that archived mail was sitting in the inbox.
+export function gmailFolder(labels: string[]): string {
+  for (const [label, folder] of [
+    ["INBOX", "INBOX"],
+    ["SENT", "SENT"],
+    ["DRAFT", "DRAFTS"],
+    ["TRASH", "TRASH"],
+    ["SPAM", "SPAM"],
+  ] as const) {
+    if (labels.includes(label)) return folder;
+  }
+
+  return "ARCHIVE";
+}
+
+export function toDetail(message: gmail_v1.Schema$Message): MessageDetail {
   const summary = toSummary(message);
   const { body, bodyFormat } = extractBody(message.payload);
 
@@ -188,20 +216,26 @@ function toDetail(message: gmail_v1.Schema$Message): MessageDetail {
   };
 }
 
-function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): {
+export function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): {
   body: string;
   bodyFormat: "text" | "html";
 } {
   const plain = findPart(payload, "text/plain");
   if (plain) return { body: decodePartData(plain), bodyFormat: "text" };
 
+  // The IMAP provider runs everything through mailparser, which turns a
+  // 200 KB newsletter into a few readable lines. Handing back raw markup here
+  // meant max_body_chars was spent on <table style=...> instead of the text.
   const html = findPart(payload, "text/html");
-  if (html) return { body: decodePartData(html), bodyFormat: "html" };
+  if (html) return { body: stripHtml(decodePartData(html)).trim(), bodyFormat: "text" };
 
   if (payload?.body?.data) {
+    const isHtml = (payload.mimeType ?? "").includes("html");
+    const decoded = decodePartData(payload);
+
     return {
-      body: decodePartData(payload),
-      bodyFormat: (payload.mimeType ?? "").includes("html") ? "html" : "text",
+      body: isHtml ? stripHtml(decoded).trim() : decoded,
+      bodyFormat: "text",
     };
   }
 
@@ -223,9 +257,33 @@ function findPart(
   return undefined;
 }
 
+// Gmail hands the part back exactly as it was sent, charset and all. Decoding
+// everything as UTF-8 turned "café" in an ISO-8859-1 message into "caf\uFFFD".
 function decodePartData(part: gmail_v1.Schema$MessagePart): string {
   const data = part.body?.data;
-  return data ? Buffer.from(data, "base64url").toString("utf8") : "";
+  if (!data) return "";
+
+  const buffer = Buffer.from(data, "base64url");
+  const charset = part.headers
+    ?.find((header) => header.name?.toLowerCase() === "content-type")
+    ?.value?.match(/charset\s*=\s*"?([\w-]+)"?/i)?.[1];
+
+  return decodeBuffer(buffer, charset);
+}
+
+function decodeBuffer(buffer: Buffer, charset: string | undefined): string {
+  const encoding = (charset ?? "utf-8").toLowerCase();
+  if (!encoding || encoding === "utf-8" || encoding === "utf8" || encoding === "us-ascii") {
+    return buffer.toString("utf8");
+  }
+
+  try {
+    return new TextDecoder(encoding).decode(buffer);
+  } catch {
+    // An encoding Node does not know is better read as Latin-1 than as
+    // replacement characters: every byte still maps to something.
+    return buffer.toString("latin1");
+  }
 }
 
 function collectAttachments(part: gmail_v1.Schema$MessagePart | undefined): AttachmentInfo[] {

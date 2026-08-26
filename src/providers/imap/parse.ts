@@ -220,7 +220,7 @@ function stripQuoted(value: string): string {
   return withoutQuotes.split(/^-- $/m)[0] ?? withoutQuotes;
 }
 
-function stripHtml(value: string): string {
+export function stripHtml(value: string): string {
   return value
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
