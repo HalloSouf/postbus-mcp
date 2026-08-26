@@ -1,6 +1,7 @@
 import type { FetchMessageObject, MessageStructureObject } from "imapflow";
 import { describe, expect, it } from "vitest";
 import {
+  attachmentsFromStructure,
   determineThreadId,
   formatAddresses,
   hasAttachments,
@@ -274,5 +275,42 @@ describe("snippets", () => {
     await expect(makeSnippetFromSource(RAW_MESSAGE.subarray(0, 200))).resolves.toBeTypeOf("string");
     await expect(makeSnippetFromSource(Buffer.alloc(0))).resolves.toBe("");
     await expect(makeSnippetFromSource(undefined)).resolves.toBe("");
+  });
+});
+
+describe("attachmentsFromStructure", () => {
+  // Taken from the IMAP body structure rather than the parsed source, so a
+  // capped fetch still reports every attachment.
+  it("lists attachments without needing the message body", () => {
+    const attachments = attachmentsFromStructure({
+      type: "multipart/mixed",
+      childNodes: [
+        { type: "text/plain" },
+        {
+          type: "application/pdf",
+          size: 2048,
+          disposition: "attachment",
+          dispositionParameters: { filename: "invoice.pdf" },
+        },
+      ],
+    });
+
+    expect(attachments).toEqual([
+      { filename: "invoice.pdf", mimeType: "application/pdf", size: 2048 },
+    ]);
+  });
+
+  it("finds an attachment named only by its Content-Type", () => {
+    const attachments = attachmentsFromStructure({
+      type: "multipart/mixed",
+      childNodes: [{ type: "image/png", size: 10, parameters: { name: "logo.png" } }],
+    });
+
+    expect(attachments[0]?.filename).toBe("logo.png");
+  });
+
+  it("returns nothing for a plain message", () => {
+    expect(attachmentsFromStructure({ type: "text/plain" })).toEqual([]);
+    expect(attachmentsFromStructure(undefined)).toEqual([]);
   });
 });

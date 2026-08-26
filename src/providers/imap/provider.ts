@@ -1,5 +1,11 @@
-import { ImapFlow, type FetchQueryObject, type MailboxObject, type SearchObject } from "imapflow";
-import { MAIL_TIMEOUT_MS } from "../../config.js";
+import {
+  ImapFlow,
+  type FetchMessageObject,
+  type FetchQueryObject,
+  type MailboxObject,
+  type SearchObject,
+} from "imapflow";
+import { MAIL_TIMEOUT_MS, MAX_MESSAGE_BYTES } from "../../config.js";
 import {
   PostbusError,
   type ImapAccount,
@@ -61,12 +67,12 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
     const parsed = parseQuery(query);
     const limit = Math.min(Math.max(1, maxResults), 100);
 
-    return withImap(account, async (context) => {
+    const { selection, notes } = await withImap(account, async (context) => {
       const { path, note } = await pickSearchMailbox(account.id, context, parsed.mailbox, query);
 
       // On a Gmail server the raw query goes through untouched, so nothing was
       // dropped; elsewhere say which terms this server cannot express.
-      const notes = [...(note ? [note] : [])];
+      const notes = note ? [note] : [];
       if (!context.gmail && parsed.ignored.length > 0) {
         notes.push(
           `This server cannot search on: ${parsed.ignored.join(", ")}. ` +
@@ -82,7 +88,7 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
           context.gmail && parsed.raw ? { gmraw: parsed.raw } : parsed.criteria;
 
         const uids = (await context.client.search(criteria, { uid: true })) || [];
-        if (uids.length === 0) return { messages: [], notes };
+        if (uids.length === 0) return { selection: undefined, notes };
 
         // IMAP cannot search on attachments, so fetch extra and filter after.
         const overshoot = parsed.requireAttachments && !context.gmail ? 4 : 1;
@@ -95,30 +101,42 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
         );
 
         const byUid = new Map(messages.map((message) => [message.uid, message]));
-        const summaries: MessageSummary[] = [];
+        const wanted: FetchMessageObject[] = [];
 
         for (const uid of selected) {
           const message = byUid.get(uid);
           if (!message) continue;
-
           if (parsed.requireAttachments && !hasAttachments(message.bodyStructure)) continue;
 
-          summaries.push(
-            toSummary(
-              message,
-              { mailbox: path, uidValidity: String(mailbox.uidValidity) },
-              await makeSnippetFromSource(message.source),
-            ),
-          );
-
-          if (summaries.length >= limit) break;
+          wanted.push(message);
+          if (wanted.length >= limit) break;
         }
 
-        return { messages: summaries, notes };
+        return {
+          selection: { wanted, path, uidValidity: String(mailbox.uidValidity) },
+          notes,
+        };
       } finally {
         lock.release();
       }
     });
+
+    if (!selection) return { messages: [], notes };
+
+    // Parsed after the lock and the connection are back. Each snippet is a
+    // full MIME parse on the event loop, so a hundred results used to hold the
+    // mailbox — and every other tenant's request — for a hundred of them.
+    const messages = await Promise.all(
+      selection.wanted.map(async (message) =>
+        toSummary(
+          message,
+          { mailbox: selection.path, uidValidity: selection.uidValidity },
+          await makeSnippetFromSource(message.source),
+        ),
+      ),
+    );
+
+    return { messages, notes };
   }
 
   async getMessage(account: ImapAccount, messageId: string): Promise<MessageDetail> {
@@ -133,7 +151,7 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
 
         const message = await context.client.fetchOne(
           String(ref.uid),
-          fetchQuery(context, { source: true }),
+          fetchQuery(context, { source: { maxLength: MAX_MESSAGE_BYTES } }),
           { uid: true },
         );
 
@@ -148,6 +166,7 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
           message,
           { mailbox: ref.mailbox, uidValidity: String(mailbox.uidValidity) },
           message.source,
+          (message.size ?? 0) > MAX_MESSAGE_BYTES,
         );
       } finally {
         lock.release();
@@ -179,6 +198,7 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
 
       const mailboxes = await threadMailboxes(account.id, context);
       const details: MessageDetail[] = [];
+      let truncated = false;
 
       for (const path of mailboxes) {
         if (details.length >= MAX_THREAD_MESSAGES) break;
@@ -189,10 +209,14 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
           const uids = (await context.client.search(criteria, { uid: true })) || [];
           if (uids.length === 0) continue;
 
+          // The tail of the uid list is the newest mail, which is the half of a
+          // long conversation anyone actually asks about.
           const wanted = uids.slice(-(MAX_THREAD_MESSAGES - details.length));
+          if (wanted.length < uids.length) truncated = true;
+
           const messages = await context.client.fetchAll(
             wanted,
-            fetchQuery(context, { source: true }),
+            fetchQuery(context, { source: { maxLength: MAX_MESSAGE_BYTES } }),
             { uid: true },
           );
 
@@ -203,6 +227,7 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
                 message,
                 { mailbox: path, uidValidity: String(mailbox.uidValidity) },
                 message.source,
+                (message.size ?? 0) > MAX_MESSAGE_BYTES,
               ),
             );
           }
@@ -218,7 +243,15 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
         );
       }
 
-      return dedupe(details).sort((a, b) => a.date.localeCompare(b.date));
+      const ordered = dedupe(details).sort((a, b) => a.date.localeCompare(b.date));
+      if (truncated && ordered[0]) {
+        ordered[0] = {
+          ...ordered[0],
+          body: `[… only the ${ordered.length} most recent messages in this conversation are shown]\n\n${ordered[0].body}`,
+        };
+      }
+
+      return ordered;
     });
   }
 

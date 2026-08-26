@@ -41,6 +41,11 @@ export const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE?.trim() || "4mb";
 
 export const MAIL_TIMEOUT_MS = int("MAIL_TIMEOUT_MS", 30_000);
 
+// How much of a single message we are willing to pull over and hand to the
+// MIME parser. get_message and get_thread used to fetch the whole RFC822
+// source, attachments included, for up to fifty messages at once.
+export const MAX_MESSAGE_BYTES = int("MAX_MESSAGE_BYTES", 2 * 1024 * 1024);
+
 export function getGoogleOAuthConfig(): {
   clientId: string;
   clientSecret: string;

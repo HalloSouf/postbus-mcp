@@ -62,6 +62,33 @@ export function parseHeaderBuffer(buffer: Buffer | undefined): RawHeaders {
   return headers;
 }
 
+/**
+ * Attachment metadata straight from the IMAP body structure. The server sends
+ * this without the message body, so it stays correct even when the source is
+ * capped — parsing a truncated source would report the tail attachments as
+ * missing.
+ */
+export function attachmentsFromStructure(
+  node: MessageStructureObject | undefined,
+): AttachmentInfo[] {
+  if (!node) return [];
+
+  const found: AttachmentInfo[] = [];
+  const filename = node.dispositionParameters?.filename ?? node.parameters?.name;
+  const isAttachment = node.disposition?.toLowerCase() === "attachment" || Boolean(filename);
+
+  if (isAttachment && !node.childNodes?.length) {
+    found.push({
+      filename: filename ?? "(unnamed)",
+      mimeType: node.type || "application/octet-stream",
+      size: node.size,
+    });
+  }
+
+  for (const child of node.childNodes ?? []) found.push(...attachmentsFromStructure(child));
+  return found;
+}
+
 export function hasAttachments(node: MessageStructureObject | undefined): boolean {
   if (!node) return false;
 
@@ -103,6 +130,7 @@ export async function toDetail(
   message: FetchMessageObject,
   context: ParseContext,
   source: Buffer,
+  truncated = false,
 ): Promise<MessageDetail> {
   const parsed: ParsedMail = await simpleParser(source, {
     skipImageLinks: true,
@@ -113,7 +141,12 @@ export async function toDetail(
   // part. That is what we want: a 200 KB newsletter becomes a few readable lines.
   const text = parsed.text?.trim();
   const html = typeof parsed.html === "string" ? parsed.html.trim() : "";
-  const body = text || html;
+  const raw = text || html;
+
+  // Say so rather than letting a cut-off body read as the whole message.
+  const body = truncated
+    ? `${raw}\n\n[… the server copy is larger than this reader fetches; the message is cut off here]`
+    : raw;
 
   const headers: RawHeaders = {
     references: joinHeader(parsed.references),
@@ -121,11 +154,14 @@ export async function toDetail(
     "message-id": parsed.messageId,
   };
 
-  const attachments: AttachmentInfo[] = parsed.attachments.map((attachment) => ({
-    filename: attachment.filename ?? "(unnamed)",
-    mimeType: attachment.contentType ?? "application/octet-stream",
-    size: attachment.size,
-  }));
+  const fromStructure = attachmentsFromStructure(message.bodyStructure);
+  const attachments: AttachmentInfo[] = fromStructure.length
+    ? fromStructure
+    : parsed.attachments.map((attachment) => ({
+        filename: attachment.filename ?? "(unnamed)",
+        mimeType: attachment.contentType ?? "application/octet-stream",
+        size: attachment.size,
+      }));
 
   return {
     id: encodeMessageId({
