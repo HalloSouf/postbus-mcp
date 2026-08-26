@@ -1,37 +1,12 @@
 #!/usr/bin/env node
-import { HOST, PORT } from "./config.js";
-import { assertMasterKey } from "./crypto.js";
-import { closeDb, databasePath, getDb } from "./db/index.js";
-import { createApp } from "./http/server.js";
-import { closeAllConnections } from "./providers/imap/connection.js";
-import { gmailApiEnabled } from "./providers/gmail/auth.js";
 import { PostbusError } from "./types.js";
 
-function main(): void {
-  // Without a usable key nothing can be read or stored: fail at startup, not
-  // halfway through someone's first tool call.
-  assertMasterKey();
-  getDb();
-
-  const server = createApp().listen(PORT, HOST, () => {
-    console.log(`postbus-mcp is listening on http://${HOST}:${PORT}/mcp`);
-    console.log(`database: ${databasePath()}`);
-    console.log(`providers: imap/smtp${gmailApiEnabled() ? " + gmail-api (optional)" : ""}`);
-  });
-
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => {
-      console.log(`\ngot ${signal}, shutting down…`);
-      server.close(() => {
-        closeAllConnections();
-        closeDb();
-        process.exit(0);
-      });
-    });
-  }
-}
-
+// Imported inside the try on purpose. Config and crypto validate at module
+// scope, and ESM evaluates a static import before any of this file's body
+// runs — so PORT=abc used to produce a bare stack trace and never reached the
+// message below.
 try {
+  const { main } = await import("./main.js");
   main();
 } catch (error) {
   if (error instanceof PostbusError) {

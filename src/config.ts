@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
+import { z } from "zod";
 import { PostbusError } from "./types.js";
 
 // Walk up to package.json so this resolves from both src/ and dist/.
@@ -21,45 +22,88 @@ export const PROJECT_ROOT = findProjectRoot();
 // The MCP client starts us from an arbitrary cwd, so be explicit about .env.
 dotenv.config({ path: resolve(PROJECT_ROOT, ".env") });
 
-function int(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed)) throw new PostbusError(`${name} is not a number: "${raw}".`);
-  return parsed;
+const port = z.coerce.number().int().min(1).max(65535);
+const bytes = z.coerce.number().int().positive();
+
+// Zod validates tool input already; the environment deserves the same rather
+// than a NaN that only shows up as a listen() failure much later.
+const schema = z.object({
+  PORT: port.default(3000),
+  HOST: z.string().trim().min(1).default("0.0.0.0"),
+
+  // Off unless asked for. Trusting X-Forwarded-* by default makes req.ip
+  // spoofable by any client when there is no reverse proxy in front, and the
+  // safe direction is the one you have to opt out of.
+  TRUST_PROXY: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
+
+  DATABASE_PATH: z
+    .string()
+    .trim()
+    .min(1)
+    .default(resolve(PROJECT_ROOT, "data", "postbus.db")),
+  MAX_BODY_SIZE: z.string().trim().min(1).default("4mb"),
+  MAIL_TIMEOUT_MS: bytes.default(30_000),
+
+  // How much of a single message we are willing to pull over and hand to the
+  // MIME parser. get_message and get_thread used to fetch the whole RFC822
+  // source, attachments included, for up to fifty messages at once.
+  MAX_MESSAGE_BYTES: bytes.default(2 * 1024 * 1024),
+
+  // Per token, per minute. A mailbox call is slow and hits someone else's
+  // server, so this is about keeping one client from monopolising the pool.
+  RATE_LIMIT_PER_MINUTE: bytes.default(60),
+  MAX_ACCOUNTS_PER_USER: bytes.default(20),
+
+  OAUTH_CALLBACK_PORT: port.default(53682),
+  GOOGLE_CLIENT_ID: z.string().trim().min(1).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().trim().min(1).optional(),
+});
+
+function load(): z.infer<typeof schema> {
+  // Empty strings are how a .env says "not set", not how it says "".
+  const present = Object.fromEntries(
+    Object.entries(process.env).filter(([, value]) => value?.trim()),
+  );
+
+  const parsed = schema.safeParse(present);
+  if (parsed.success) return parsed.data;
+
+  const problems = parsed.error.issues
+    .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+    .join("; ");
+
+  throw new PostbusError(`The environment is not valid: ${problems}.`, undefined, "config");
 }
 
-export const PORT = int("PORT", 3000);
-export const HOST = process.env.HOST?.trim() || "0.0.0.0";
+const config = load();
 
-export const TRUST_PROXY = (process.env.TRUST_PROXY?.trim() || "1").toLowerCase() !== "false";
-
-export const DATABASE_PATH =
-  process.env.DATABASE_PATH?.trim() || resolve(PROJECT_ROOT, "data", "postbus.db");
-
-export const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE?.trim() || "4mb";
-
-export const MAIL_TIMEOUT_MS = int("MAIL_TIMEOUT_MS", 30_000);
-
-// How much of a single message we are willing to pull over and hand to the
-// MIME parser. get_message and get_thread used to fetch the whole RFC822
-// source, attachments included, for up to fifty messages at once.
-export const MAX_MESSAGE_BYTES = int("MAX_MESSAGE_BYTES", 2 * 1024 * 1024);
+export const PORT = config.PORT;
+export const HOST = config.HOST;
+export const TRUST_PROXY = config.TRUST_PROXY;
+export const DATABASE_PATH = config.DATABASE_PATH;
+export const MAX_BODY_SIZE = config.MAX_BODY_SIZE;
+export const MAIL_TIMEOUT_MS = config.MAIL_TIMEOUT_MS;
+export const MAX_MESSAGE_BYTES = config.MAX_MESSAGE_BYTES;
+export const RATE_LIMIT_PER_MINUTE = config.RATE_LIMIT_PER_MINUTE;
+export const MAX_ACCOUNTS_PER_USER = config.MAX_ACCOUNTS_PER_USER;
+export const OAUTH_CALLBACK_PORT = config.OAUTH_CALLBACK_PORT;
 
 export function getGoogleOAuthConfig(): {
   clientId: string;
   clientSecret: string;
   redirectUri: string;
 } | null {
-  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) return null;
+  if (!config.GOOGLE_CLIENT_ID || !config.GOOGLE_CLIENT_SECRET) return null;
 
-  const port = int("OAUTH_CALLBACK_PORT", 53682);
-  return { clientId, clientSecret, redirectUri: `http://localhost:${port}/oauth2callback` };
+  return {
+    clientId: config.GOOGLE_CLIENT_ID,
+    clientSecret: config.GOOGLE_CLIENT_SECRET,
+    redirectUri: `http://localhost:${config.OAUTH_CALLBACK_PORT}/oauth2callback`,
+  };
 }
-
-export const OAUTH_CALLBACK_PORT = int("OAUTH_CALLBACK_PORT", 53682);
 
 export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",

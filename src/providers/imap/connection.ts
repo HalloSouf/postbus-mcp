@@ -132,17 +132,20 @@ export function imapTlsOptions(account: ImapAccount): { doSTARTTLS?: true } {
   return { doSTARTTLS: true };
 }
 
-export function release(accountId: string): void {
+export function release(accountId: string): Promise<void> {
   const connection = pool.get(accountId);
-  if (!connection) return;
+  if (!connection) return Promise.resolve();
 
   pool.delete(accountId);
   clearTimeout(connection.timer);
-  void connection.context.client.logout().catch(() => connection.context.client.close());
+
+  return connection.context.client.logout().catch(() => connection.context.client.close());
 }
 
-export function closeAllConnections(): void {
-  for (const accountId of [...pool.keys()]) release(accountId);
+// Awaited on shutdown: releasing without waiting meant process.exit() ran
+// before LOGOUT left the socket, and the mail server kept the session open.
+export async function closeAllConnections(): Promise<void> {
+  await Promise.allSettled([...pool.keys()].map((accountId) => release(accountId)));
 }
 
 export async function listMailboxes(

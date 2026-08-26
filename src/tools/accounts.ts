@@ -135,7 +135,7 @@ export function registerAccountTools(server: McpServer, context: ToolContext): v
         // this a relink kept serving the old connection for up to a minute —
         // still authenticated with the password that was just rotated away,
         // and against the old host if that changed too.
-        release(saved.id);
+        await release(saved.id);
 
         return [
           `${replaced ? "Relinked" : "Linked"}: "${saved.alias}" → ${saved.email}`,
@@ -170,7 +170,7 @@ export function registerAccountTools(server: McpServer, context: ToolContext): v
           );
         }
 
-        release(removedId);
+        await release(removedId);
         return `Mailbox "${alias}" is unlinked and its stored app password is gone.`;
       }),
   );
