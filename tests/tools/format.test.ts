@@ -97,6 +97,33 @@ describe("formatAccounts", () => {
   });
 });
 
+describe("search notes", () => {
+  // parseQuery records what it could not translate, but nothing passed it on,
+  // so a dropped date filter looked like a narrower search than it was.
+  it("tells the model which terms were dropped", () => {
+    const output = formatSearchResults(
+      "work",
+      "newer_than:yesterday from:a@b.nl",
+      [SUMMARY],
+      ["This server cannot search on: newer_than:yesterday."],
+    );
+
+    expect(output).toContain("cannot search on: newer_than:yesterday");
+  });
+
+  it("carries notes even when nothing matched", () => {
+    const output = formatSearchResults(
+      "work",
+      "label:invoices",
+      [],
+      ['This mailbox has no folder called "invoices", so the inbox was searched instead.'],
+    );
+
+    expect(output).toContain("No messages found");
+    expect(output).toContain("no folder called");
+  });
+});
+
 describe("untrusted content fencing", () => {
   it("marks search snippets as sender-written data", () => {
     const output = formatSearchResults("work", "", [SUMMARY]);

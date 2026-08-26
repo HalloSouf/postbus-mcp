@@ -6,6 +6,7 @@ import {
   type MailProvider,
   type MessageDetail,
   type MessageSummary,
+  type SearchResult,
   type SendOptions,
 } from "../../types.js";
 import { mapLimit, normalizeDate } from "../../util.js";
@@ -25,11 +26,7 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
     await call(() => this.client(account).users.getProfile({ userId: "me" }));
   }
 
-  async search(
-    account: GmailApiAccount,
-    query: string,
-    maxResults: number,
-  ): Promise<MessageSummary[]> {
+  async search(account: GmailApiAccount, query: string, maxResults: number): Promise<SearchResult> {
     const gmail = this.client(account);
     const limit = Math.min(Math.max(1, maxResults), 100);
 
@@ -38,9 +35,11 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
     );
 
     const refs = list.data.messages ?? [];
-    if (refs.length === 0) return [];
+    // Gmail gets the query verbatim, so there is nothing this provider had to
+    // drop and nothing to warn about.
+    if (refs.length === 0) return { messages: [], notes: [] };
 
-    return mapLimit(refs, MAX_PARALLEL_FETCHES, async (ref) => {
+    const messages = await mapLimit(refs, MAX_PARALLEL_FETCHES, async (ref) => {
       const detail = await call(() =>
         gmail.users.messages.get({
           userId: "me",
@@ -51,6 +50,8 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
       );
       return toSummary(detail.data);
     });
+
+    return { messages, notes: [] };
   }
 
   async getMessage(account: GmailApiAccount, messageId: string): Promise<MessageDetail> {

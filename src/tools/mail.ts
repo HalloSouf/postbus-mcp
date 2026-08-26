@@ -40,8 +40,11 @@ export function registerMailTools(server: McpServer, context: ToolContext): void
     ({ account, query, max_results }) =>
       guard(async () => {
         const { account: resolved, provider } = resolveAccount(context, account);
-        const messages = await provider.search(resolved, query ?? "", max_results ?? 10);
-        return formatSearchResults(account, query ?? "", messages);
+        const result = await provider.search(resolved, query ?? "", max_results ?? 10);
+
+        // notes carries whatever the provider could not honour. Dropping it
+        // here is what let a query search something other than what it said.
+        return formatSearchResults(account, query ?? "", result.messages, result.notes);
       }),
   );
 

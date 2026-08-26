@@ -5,7 +5,8 @@ export type MailboxHint = "inbox" | "sent" | "drafts" | "archive" | "all" | "tra
 export interface ParsedQuery {
   criteria: SearchObject;
   raw: string;
-  mailbox?: MailboxHint;
+  /** A known hint, or a folder name typed literally by the caller. */
+  mailbox?: MailboxHint | string;
   requireAttachments: boolean;
   ignored: string[];
 }
@@ -34,7 +35,7 @@ export function parseQuery(query: string): ParsedQuery {
   const negations: SearchObject[] = [];
   const freeText: string[] = [];
   const ignored: string[] = [];
-  let mailbox: MailboxHint | undefined;
+  let mailbox: MailboxHint | string | undefined;
   let requireAttachments = false;
 
   for (const match of query.matchAll(TOKEN)) {
@@ -166,11 +167,13 @@ function applyStateOrMailbox(
   value: string,
   criteria: SearchObject,
   not: boolean,
-): { handled: boolean; mailbox?: MailboxHint } {
+): { handled: boolean; mailbox?: MailboxHint | string } {
+  // An unrecognised folder used to be dropped and not even recorded, so
+  // "label:invoices" quietly became "everything in the inbox". Pass the name
+  // through: the server may well have a folder called that, and if it does
+  // not, the provider says so.
   if (key === "in" || key === "label") {
-    const mailbox = MAILBOX_ALIASES[value];
-    if (mailbox) return { handled: true, mailbox };
-    return { handled: true, mailbox: undefined };
+    return { handled: true, mailbox: MAILBOX_ALIASES[value] ?? value };
   }
 
   const flip = (state: boolean) => (not ? !state : state);

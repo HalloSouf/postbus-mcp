@@ -170,3 +170,19 @@ describe("absolute dates", () => {
     expect(parseQuery("before:2026-13-40").ignored).toContain("before:2026-13-40");
   });
 });
+
+describe("folder selection", () => {
+  it("maps the folder aliases it knows", () => {
+    expect(parseQuery("in:sent").mailbox).toBe("sent");
+    expect(parseQuery("in:bin").mailbox).toBe("trash");
+    expect(parseQuery("in:spam").mailbox).toBe("junk");
+  });
+
+  // An unknown folder used to vanish without even being recorded, so
+  // "label:invoices" came back as the whole inbox announced as a search for
+  // invoices. The name is passed on; the provider resolves or reports it.
+  it("passes an unknown folder name through instead of dropping it", () => {
+    expect(parseQuery("label:invoices").mailbox).toBe("invoices");
+    expect(parseQuery("in:projects").mailbox).toBe("projects");
+  });
+});

@@ -77,6 +77,13 @@ export interface MessageDetail extends MessageSummary {
   attachments: AttachmentInfo[];
 }
 
+/** Search results plus anything the provider could not honour verbatim. */
+export interface SearchResult {
+  messages: MessageSummary[];
+  /** Query terms this provider dropped. Never swallow these silently. */
+  notes: string[];
+}
+
 export interface SendOptions {
   cc?: string;
   bcc?: string;
@@ -94,7 +101,7 @@ export interface MailProvider<A extends MailAccount = MailAccount> {
 
   verify(account: A): Promise<void>;
 
-  search(account: A, query: string, maxResults: number): Promise<MessageSummary[]>;
+  search(account: A, query: string, maxResults: number): Promise<SearchResult>;
 
   getMessage(account: A, messageId: string): Promise<MessageDetail>;
 

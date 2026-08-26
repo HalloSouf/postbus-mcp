@@ -6,6 +6,7 @@ import {
   type MailProvider,
   type MessageDetail,
   type MessageSummary,
+  type SearchResult,
   type SendOptions,
 } from "../../types.js";
 import {
@@ -56,12 +57,23 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
     await verifySmtp(account);
   }
 
-  async search(account: ImapAccount, query: string, maxResults: number): Promise<MessageSummary[]> {
+  async search(account: ImapAccount, query: string, maxResults: number): Promise<SearchResult> {
     const parsed = parseQuery(query);
     const limit = Math.min(Math.max(1, maxResults), 100);
 
     return withImap(account, async (context) => {
-      const path = await pickSearchMailbox(account.id, context, parsed.mailbox, query);
+      const { path, note } = await pickSearchMailbox(account.id, context, parsed.mailbox, query);
+
+      // On a Gmail server the raw query goes through untouched, so nothing was
+      // dropped; elsewhere say which terms this server cannot express.
+      const notes = [...(note ? [note] : [])];
+      if (!context.gmail && parsed.ignored.length > 0) {
+        notes.push(
+          `This server cannot search on: ${parsed.ignored.join(", ")}. ` +
+            "Those terms were left out, so the results are wider than the query asks for.",
+        );
+      }
+
       const lock = await context.client.getMailboxLock(path);
 
       try {
@@ -70,7 +82,7 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
           context.gmail && parsed.raw ? { gmraw: parsed.raw } : parsed.criteria;
 
         const uids = (await context.client.search(criteria, { uid: true })) || [];
-        if (uids.length === 0) return [];
+        if (uids.length === 0) return { messages: [], notes };
 
         // IMAP cannot search on attachments, so fetch extra and filter after.
         const overshoot = parsed.requireAttachments && !context.gmail ? 4 : 1;
@@ -102,7 +114,7 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
           if (summaries.length >= limit) break;
         }
 
-        return summaries;
+        return { messages: summaries, notes };
       } finally {
         lock.release();
       }
@@ -253,11 +265,22 @@ function fetchQuery(context: ImapContext, extra: Partial<FetchQueryObject>): Fet
 async function pickSearchMailbox(
   accountId: string,
   context: ImapContext,
-  hint: MailboxHint | undefined,
+  hint: MailboxHint | string | undefined,
   query: string,
-): Promise<string> {
+): Promise<{ path: string; note?: string }> {
   const wanted = hint ?? (context.gmail && /\b(in|label):/i.test(query) ? "all" : "inbox");
-  return (await resolveMailbox(accountId, context, wanted)) ?? "INBOX";
+  const path = await resolveMailbox(accountId, context, wanted);
+
+  if (path) return { path };
+
+  // Falling back silently is how "label:invoices" turned into the whole inbox
+  // while still being announced as a search for invoices.
+  return {
+    path: "INBOX",
+    note:
+      `This mailbox has no folder called "${wanted}", so the inbox was searched instead. ` +
+      "Ask for the folder by its exact name if it exists under another one.",
+  };
 }
 
 function requireMailbox(mailbox: MailboxObject | false, path: string): MailboxObject {
