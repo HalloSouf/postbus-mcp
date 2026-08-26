@@ -1,5 +1,6 @@
 import { ImapFlow, type ListResponse } from "imapflow";
 import { MAIL_TIMEOUT_MS } from "../../config.js";
+import { isLoopbackHost } from "../../net.js";
 import { PostbusError, type ImapAccount } from "../../types.js";
 import type { MailboxHint } from "./query.js";
 
@@ -73,6 +74,7 @@ async function acquire(account: ImapAccount): Promise<PooledConnection> {
     host: account.imapHost,
     port: account.imapPort,
     secure: account.imapSecure,
+    ...imapTlsOptions(account),
     auth: { user: account.username, pass: account.password },
     logger: false,
     disableAutoIdle: true,
@@ -112,6 +114,17 @@ function touch(accountId: string): void {
   clearTimeout(connection.timer);
   connection.timer = setTimeout(() => release(accountId), IDLE_TTL_MS);
   connection.timer.unref?.();
+}
+
+/**
+ * On a plain port imapflow upgrades with STARTTLS only when the server offers
+ * it, and continues in the clear otherwise — an attacker who strips the
+ * capability gets the app password. Demand the upgrade instead, except on a
+ * local bridge where there is no network to intercept.
+ */
+export function imapTlsOptions(account: ImapAccount): { doSTARTTLS?: true } {
+  if (account.imapSecure || isLoopbackHost(account.imapHost)) return {};
+  return { doSTARTTLS: true };
 }
 
 export function release(accountId: string): void {

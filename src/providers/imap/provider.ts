@@ -9,6 +9,7 @@ import {
   type SendOptions,
 } from "../../types.js";
 import {
+  imapTlsOptions,
   resolveMailbox,
   threadMailboxes,
   translateImapError,
@@ -34,6 +35,7 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
       host: account.imapHost,
       port: account.imapPort,
       secure: account.imapSecure,
+      ...imapTlsOptions(account),
       auth: { user: account.username, pass: account.password },
       logger: false,
       verifyOnly: true,

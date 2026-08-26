@@ -3,6 +3,7 @@ import nodemailer from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type MimeNode from "nodemailer/lib/mime-node/index.js";
 import { MAIL_TIMEOUT_MS } from "../../config.js";
+import { isLoopbackHost } from "../../net.js";
 import { PostbusError, type ImapAccount, type SendOptions } from "../../types.js";
 
 function createTransport(account: ImapAccount) {
@@ -11,6 +12,11 @@ function createTransport(account: ImapAccount) {
     port: account.smtpPort,
     // Port 465 is TLS from the first byte; 587 starts plain and does STARTTLS.
     secure: account.smtpSecure,
+    // Without this nodemailer stays in the clear when a server does not
+    // advertise STARTTLS, which is exactly what a downgrade attack arranges.
+    // The Outlook and iCloud presets both use port 587, so this is the normal
+    // path, not an edge case. A local bridge has no network to intercept.
+    requireTLS: !account.smtpSecure && !isLoopbackHost(account.smtpHost),
     auth: { user: account.username, pass: account.password },
     connectionTimeout: MAIL_TIMEOUT_MS,
     greetingTimeout: MAIL_TIMEOUT_MS,
