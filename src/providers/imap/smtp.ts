@@ -85,6 +85,9 @@ export async function sendComposed(account: ImapAccount, mail: ComposedMail): Pr
 }
 
 function translateSmtpError(error: unknown): Error {
+  // First, not last: see translateImapError.
+  if (error instanceof PostbusError) return error;
+
   const err = error as { message?: string; code?: string; responseCode?: number };
   const message = err?.message ?? String(error);
 
@@ -92,6 +95,7 @@ function translateSmtpError(error: unknown): Error {
     return new PostbusError(
       "The SMTP server rejected these credentials.",
       "Use the same app password as for IMAP. For Gmail, port 465 (TLS) or 587 (STARTTLS) both work.",
+      "auth",
     );
   }
 
@@ -100,6 +104,7 @@ function translateSmtpError(error: unknown): Error {
       "TLS mismatch on the SMTP port.",
       "Port 465 is TLS from the first byte, port 587 starts plain and upgrades with STARTTLS. " +
         "If the port is right, pass smtp_secure explicitly to add_mail_account.",
+      "upstream",
     );
   }
 
@@ -107,13 +112,17 @@ function translateSmtpError(error: unknown): Error {
     return new PostbusError(
       "Could not connect to the SMTP server.",
       "Check host and port. Note that 465 needs TLS and 587 does not (it uses STARTTLS).",
+      "transient",
     );
   }
 
   if (err?.responseCode && err.responseCode >= 500) {
-    return new PostbusError(`The SMTP server refused the message: ${message}`);
+    return new PostbusError(
+      `The SMTP server refused the message: ${message}`,
+      undefined,
+      "upstream",
+    );
   }
 
-  if (error instanceof PostbusError) return error;
-  return new PostbusError(`SMTP error: ${message}`);
+  return new PostbusError(`SMTP error: ${message}`, undefined, "upstream");
 }

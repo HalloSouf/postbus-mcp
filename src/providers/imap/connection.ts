@@ -84,7 +84,12 @@ async function acquire(account: ImapAccount): Promise<PooledConnection> {
     clientInfo: { name: "postbus-mcp" },
   });
 
-  client.on("error", () => release(account.id));
+  // The pool is keyed on the account, not the socket. A late error event from
+  // a connection that was already dropped used to log out whatever had taken
+  // its place — killing the next request's fetch on a connection that was fine.
+  client.on("error", () => {
+    if (pool.get(account.id)?.context.client === client) release(account.id);
+  });
 
   try {
     await client.connect();
@@ -143,9 +148,10 @@ export function closeAllConnections(): void {
 export async function listMailboxes(
   accountId: string,
   context: ImapContext,
+  refresh = false,
 ): Promise<ListResponse[]> {
   const connection = pool.get(accountId);
-  if (connection?.mailboxes) return connection.mailboxes;
+  if (!refresh && connection?.mailboxes) return connection.mailboxes;
 
   const mailboxes = await context.client.list();
   if (connection) connection.mailboxes = mailboxes;
@@ -172,7 +178,22 @@ export async function resolveMailbox(
   const lower = hint.toLowerCase();
   if (lower === "inbox") return "INBOX";
 
-  const mailboxes = await listMailboxes(accountId, context);
+  const found = await lookupMailbox(accountId, context, lower, false);
+  if (found) return found;
+
+  // The folder list is cached per connection, which lasts a minute. A folder
+  // created during the session would otherwise stay invisible until then, so
+  // a miss is worth one refresh before giving up.
+  return lookupMailbox(accountId, context, lower, true);
+}
+
+async function lookupMailbox(
+  accountId: string,
+  context: ImapContext,
+  lower: string,
+  refresh: boolean,
+): Promise<string | undefined> {
+  const mailboxes = await listMailboxes(accountId, context, refresh);
   const special = SPECIAL_USE[lower as MailboxHint];
 
   if (special) {
@@ -201,6 +222,11 @@ export async function threadMailboxes(accountId: string, context: ImapContext): 
 }
 
 export function translateImapError(error: unknown): Error {
+  // First, not last. Checking this after the regexes let a PostbusError whose
+  // text happened to contain "ETIMEDOUT" be rewritten into a connection
+  // failure, losing the message that was actually raised.
+  if (error instanceof PostbusError) return error;
+
   const err = error as { message?: string; authenticationFailed?: boolean; code?: string };
   const message = err?.message ?? String(error);
 
@@ -210,6 +236,7 @@ export function translateImapError(error: unknown): Error {
       "Use an app password, not your normal password. For Gmail: turn on 2FA and create one at " +
         "https://myaccount.google.com/apppasswords. Still failing? Remove the mailbox and add it " +
         "again with add_mail_account.",
+      "auth",
     );
   }
 
@@ -217,6 +244,7 @@ export function translateImapError(error: unknown): Error {
     return new PostbusError(
       "The IMAP server cannot be found (DNS error).",
       "Check the hostname you passed to add_mail_account.",
+      "upstream",
     );
   }
 
@@ -225,6 +253,7 @@ export function translateImapError(error: unknown): Error {
       "TLS mismatch on the IMAP port.",
       "Port 993 is TLS from the first byte, port 143 starts plain and upgrades with STARTTLS. " +
         "If the port is right, pass imap_secure explicitly to add_mail_account.",
+      "upstream",
     );
   }
 
@@ -232,9 +261,9 @@ export function translateImapError(error: unknown): Error {
     return new PostbusError(
       "Could not connect to the IMAP server.",
       "Check host and port (usually 993 with TLS).",
+      "transient",
     );
   }
 
-  if (error instanceof PostbusError) return error;
-  return new PostbusError(`IMAP error: ${message}`);
+  return new PostbusError(`IMAP error: ${message}`, undefined, "upstream");
 }

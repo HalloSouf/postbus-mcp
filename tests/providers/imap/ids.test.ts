@@ -80,3 +80,27 @@ describe("header helpers", () => {
     expect(parseReferences("")).toEqual([]);
   });
 });
+
+describe("decodeMessageId strictness", () => {
+  // parseInt("12abc") is 12, so these used to be accepted and silently read
+  // whatever message uid 12 happened to be.
+  it("refuses a uid with anything after the digits", () => {
+    for (const id of ["INBOX:1:12abc", "INBOX:1:12 ", "INBOX:1:1e3", "INBOX:1:+12"]) {
+      expect(() => decodeMessageId(id)).toThrow(PostbusError);
+    }
+  });
+
+  it("refuses a uid that is not a real message number", () => {
+    for (const id of ["INBOX:1:0", "INBOX:1:-4", "INBOX:1:"]) {
+      expect(() => decodeMessageId(id)).toThrow(PostbusError);
+    }
+  });
+
+  it("still accepts a genuine id", () => {
+    expect(decodeMessageId("INBOX:1787752052:42")).toEqual({
+      mailbox: "INBOX",
+      uidValidity: "1787752052",
+      uid: 42,
+    });
+  });
+});

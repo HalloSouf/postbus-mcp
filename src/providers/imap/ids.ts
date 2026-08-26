@@ -13,12 +13,15 @@ export function encodeMessageId(ref: MessageRef): string {
 
 export function decodeMessageId(value: string): MessageRef {
   const parts = value.split(":");
-  const uid = Number.parseInt(parts[2] ?? "", 10);
+  // parseInt("12abc") is 12, so an id like "INBOX:1:12abc" used to be accepted
+  // and quietly read a different message than the one that was asked for.
+  const uid = /^\d+$/.test(parts[2] ?? "") ? Number.parseInt(parts[2] as string, 10) : NaN;
 
-  if (parts.length !== 3 || !parts[0] || !parts[1] || Number.isNaN(uid)) {
+  if (parts.length !== 3 || !parts[0] || !parts[1] || Number.isNaN(uid) || uid < 1) {
     throw new PostbusError(
       `"${value}" is not a valid message id.`,
       "Use an id from search_emails or get_thread.",
+      "invalid_input",
     );
   }
 
