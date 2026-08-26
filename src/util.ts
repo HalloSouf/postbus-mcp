@@ -20,7 +20,7 @@ export async function mapLimit<T, R>(
 
 export function truncate(value: string, max: number): string {
   if (value.length <= max) return value;
-  return `${value.slice(0, max)}\n\n[… afgekapt, ${value.length - max} tekens weggelaten]`;
+  return `${value.slice(0, max)}\n\n[… truncated, ${value.length - max} characters left out]`;
 }
 
 export function normalizeDate(raw: string | undefined, fallbackMs?: string | null): string {

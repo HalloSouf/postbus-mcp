@@ -82,7 +82,7 @@ docker compose exec postbus node dist/cli/add-user.js "Soufiane"
 
 That last command prints an API token exactly once. Save it right away.
 
-### Locally with Node (22 or newer)
+### Locally with Node (24 or newer)
 
 ```bash
 npm install
