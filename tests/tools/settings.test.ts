@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveSettings } from "../../src/tools/accounts.js";
+import { assertMailTargetAllowed, resolveSettings } from "../../src/tools/accounts.js";
 import { findPreset } from "../../src/providers/imap/presets.js";
 import { PostbusError } from "../../src/types.js";
 
@@ -101,5 +101,45 @@ describe("resolveSettings", () => {
       expect((error as PostbusError).message).toContain("souf@ownserver.com");
       expect((error as PostbusError).hint).toMatch(/imap_host/);
     }
+  });
+});
+
+describe("assertMailTargetAllowed", () => {
+  const PUBLIC = {
+    imapHost: "imap.gmail.com",
+    imapPort: 993,
+    smtpHost: "smtp.gmail.com",
+    smtpPort: 465,
+  };
+
+  it("allows a normal public mailbox", async () => {
+    await expect(assertMailTargetAllowed(PUBLIC)).resolves.toBeUndefined();
+  });
+
+  it("refuses a host inside the private network", async () => {
+    await expect(assertMailTargetAllowed({ ...PUBLIC, imapHost: "10.0.0.5" })).rejects.toThrow(
+      /private network/,
+    );
+  });
+
+  it("refuses a public host on a port that is not a mail port", async () => {
+    await expect(assertMailTargetAllowed({ ...PUBLIC, imapPort: 8080 })).rejects.toThrow(
+      /not a IMAP port/,
+    );
+    await expect(assertMailTargetAllowed({ ...PUBLIC, smtpPort: 22 })).rejects.toThrow(
+      /not a SMTP port/,
+    );
+  });
+
+  // Proton Mail Bridge is a shipped preset on 127.0.0.1:1143 and :1025.
+  it("lets a local bridge choose its own ports", async () => {
+    await expect(
+      assertMailTargetAllowed({
+        imapHost: "127.0.0.1",
+        imapPort: 1143,
+        smtpHost: "127.0.0.1",
+        smtpPort: 1025,
+      }),
+    ).resolves.toBeUndefined();
   });
 });

@@ -4,6 +4,7 @@ import { accountExists, listAccounts, removeAccount, saveImapAccount } from "../
 import { ImapSmtpProvider } from "../providers/imap/provider.js";
 import { findPreset } from "../providers/imap/presets.js";
 import { release } from "../providers/imap/connection.js";
+import { assertMailHostAllowed, isLoopbackHost } from "../net.js";
 import { PostbusError, type ImapAccount } from "../types.js";
 import type { ToolContext } from "./context.js";
 import { formatAccounts } from "./format.js";
@@ -93,6 +94,7 @@ export function registerAccountTools(server: McpServer, context: ToolContext): v
         }
 
         const settings = resolveSettings(input);
+        await assertMailTargetAllowed(settings);
         const replaced = accountExists(context.user.id, alias);
 
         // Verify first, store second: a broken mailbox helps nobody.
@@ -162,6 +164,37 @@ export function registerAccountTools(server: McpServer, context: ToolContext): v
         release(removedId);
         return `Mailbox "${alias}" is unlinked and its stored app password is gone.`;
       }),
+  );
+}
+
+// Host and port come straight from the caller, so without this the tool is a
+// port scanner for whatever network the container sits in: aim it at an
+// internal range and read the topology off the connection errors.
+const PUBLIC_IMAP_PORTS = new Set([143, 993]);
+const PUBLIC_SMTP_PORTS = new Set([25, 465, 587, 2525]);
+
+export async function assertMailTargetAllowed(settings: {
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+}): Promise<void> {
+  await assertMailHostAllowed(settings.imapHost);
+  await assertMailHostAllowed(settings.smtpHost);
+
+  assertPort("IMAP", settings.imapHost, settings.imapPort, PUBLIC_IMAP_PORTS);
+  assertPort("SMTP", settings.smtpHost, settings.smtpPort, PUBLIC_SMTP_PORTS);
+}
+
+// A local bridge picks its own ports (Proton Mail Bridge uses 1143 and 1025),
+// so only public hosts are held to the standard ones.
+function assertPort(protocol: string, host: string, port: number, allowed: Set<number>): void {
+  if (isLoopbackHost(host) || allowed.has(port)) return;
+
+  throw new PostbusError(
+    `Port ${port} is not a ${protocol} port.`,
+    `Use one of: ${[...allowed].join(", ")}.`,
+    "invalid_input",
   );
 }
 
