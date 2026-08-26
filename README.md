@@ -82,7 +82,7 @@ docker compose exec postbus node dist/cli/add-user.js "Soufiane"
 
 That last command prints an API token exactly once. Save it right away.
 
-### Locally with Node (20 or newer)
+### Locally with Node (22 or newer)
 
 ```bash
 npm install
@@ -459,9 +459,10 @@ Then link a mailbox with `imap_host: 127.0.0.1`, `imap_port: 3143`,
 > mailbox.
 
 GitHub Actions runs the same checks on every push and pull request: formatting,
-types, `npm audit` over the production dependencies, the tests on Node 20 and
-22, and a docker build that boots the container and verifies that `/health`
-answers and `/mcp` returns 401 without a token.
+types, `npm audit` over the production dependencies, the tests, and a docker
+build that boots the container and verifies that `/health` answers and `/mcp`
+returns 401 without a token. CI and the container both run Node 24, the current
+LTS.
 
 ### Project layout
 

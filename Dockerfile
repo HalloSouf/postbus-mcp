@@ -2,7 +2,7 @@
 
 # better-sqlite3 is native and is compiled against musl here, so the runtime
 # stage can reuse the same binary.
-FROM node:22-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
@@ -14,7 +14,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-alpine AS runtime
+FROM node:24-alpine AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production \
