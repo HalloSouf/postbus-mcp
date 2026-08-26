@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { google, type Auth } from "googleapis";
+import { google, Auth } from "googleapis";
 import { GOOGLE_SCOPES, OAUTH_CALLBACK_PORT, getGoogleOAuthConfig } from "../../config.js";
 import { accountExists, saveGmailApiAccount } from "../../db/accounts.js";
 import { PostbusError } from "../../types.js";
@@ -32,6 +32,7 @@ export interface LinkedAccountResult {
 
 interface PendingFlow extends PendingAuthInfo {
   state: string;
+  codeVerifier: string;
   client: Auth.OAuth2Client;
   server: Server;
   timer: NodeJS.Timeout;
@@ -67,12 +68,19 @@ export async function beginGmailAuth(userId: string, alias: string): Promise<Pen
   const client = createOAuthClient(OAUTH_REDIRECT_URI);
   const state = randomBytes(16).toString("hex");
 
+  // The code comes back over plain http on loopback, where any other local
+  // process that can observe the URL could redeem it. PKCE ties it to this
+  // flow, as OAuth 2.1 and Google's native-app guidance both require.
+  const { codeVerifier, codeChallenge } = await client.generateCodeVerifierAsync();
+
   const authUrl = client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent", // forces a refresh token, also when relinking
     scope: GOOGLE_SCOPES,
     include_granted_scopes: true,
     state,
+    code_challenge_method: Auth.CodeChallengeMethod.S256,
+    code_challenge: codeChallenge,
   });
 
   const server = await startCallbackServer(state);
@@ -90,6 +98,7 @@ export async function beginGmailAuth(userId: string, alias: string): Promise<Pen
     redirectUri: OAUTH_REDIRECT_URI,
     expiresAt,
     state,
+    codeVerifier,
     client,
     server,
     timer,
@@ -120,7 +129,7 @@ export async function finishGmailAuth(
   }
 
   const code = await waitForCode(flow, waitMs);
-  const { tokens } = await flow.client.getToken(code);
+  const { tokens } = await flow.client.getToken({ code, codeVerifier: flow.codeVerifier });
 
   if (!tokens.refresh_token) {
     cancelGmailAuth();
@@ -236,14 +245,17 @@ function startCallbackServer(expectedState: string): Promise<Server> {
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
 
-      if (error) {
-        respond(res, 400, "Access denied", `Google returned: ${error}`);
-        failPending(new PostbusError(`Google refused the authorization: ${error}`));
+      // State first. Checking the error branch ahead of it let any page the
+      // operator happened to visit cancel the pending flow with a bare
+      // /oauth2callback?error=x, no state needed.
+      if (state !== expectedState) {
+        respond(res, 400, "Invalid state", "The state parameter does not match. Start over.");
         return;
       }
 
-      if (state !== expectedState) {
-        respond(res, 400, "Invalid state", "The state parameter does not match. Start over.");
+      if (error) {
+        respond(res, 400, "Access denied", `Google returned: ${error}`);
+        failPending(new PostbusError(`Google refused the authorization: ${error}`));
         return;
       }
 
@@ -282,12 +294,22 @@ async function fetchEmailAddress(auth: Auth.OAuth2Client): Promise<string> {
   return email;
 }
 
+// `detail` can carry a query parameter, so it is not ours to trust.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function respond(res: ServerResponse, status: number, title: string, detail: string): void {
   res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
   res.end(
     `<!doctype html><meta charset="utf-8"><title>postbus-mcp</title>
 <style>body{font:16px/1.5 system-ui,sans-serif;margin:15vh auto;max-width:32rem;padding:0 1.5rem;color:#111}
 h1{font-size:1.4rem;margin:0 0 .5rem}p{color:#555;margin:0}</style>
-<h1>${title}</h1><p>${detail}</p>`,
+<h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p>`,
   );
 }
