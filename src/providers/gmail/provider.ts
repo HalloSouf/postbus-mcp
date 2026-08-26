@@ -1,4 +1,4 @@
-import { google, type gmail_v1 } from "googleapis";
+import { gmail, type gmail_v1 } from "@googleapis/gmail";
 import {
   PostbusError,
   type AttachmentInfo,
@@ -125,7 +125,7 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
   }
 
   private client(account: GmailApiAccount): gmail_v1.Gmail {
-    return google.gmail({ version: "v1", auth: createClientForRefreshToken(account.refreshToken) });
+    return gmail({ version: "v1", auth: createClientForRefreshToken(account.refreshToken) });
   }
 }
 

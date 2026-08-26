@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { google, Auth } from "googleapis";
+import { gmail } from "@googleapis/gmail";
 import { GOOGLE_SCOPES, OAUTH_CALLBACK_PORT, getGoogleOAuthConfig } from "../../config.js";
 import { accountExists, saveGmailApiAccount } from "../../db/accounts.js";
 import { PostbusError } from "../../types.js";
-import { createOAuthClient } from "./auth.js";
+import { createOAuthClient, type GmailOAuthClient } from "./auth.js";
 
 const OAUTH_REDIRECT_URI = `http://localhost:${OAUTH_CALLBACK_PORT}/oauth2callback`;
 
@@ -33,7 +33,7 @@ export interface LinkedAccountResult {
 interface PendingFlow extends PendingAuthInfo {
   state: string;
   codeVerifier: string;
-  client: Auth.OAuth2Client;
+  client: GmailOAuthClient;
   server: Server;
   timer: NodeJS.Timeout;
   code?: string;
@@ -79,7 +79,9 @@ export async function beginGmailAuth(userId: string, alias: string): Promise<Pen
     scope: GOOGLE_SCOPES,
     include_granted_scopes: true,
     state,
-    code_challenge_method: Auth.CodeChallengeMethod.S256,
+    // "S256" rather than the enum: the enum lives in google-auth-library and
+    // importing it separately drags in a second copy of that package.
+    code_challenge_method: "S256" as never,
     code_challenge: codeChallenge,
   });
 
@@ -285,9 +287,8 @@ function startCallbackServer(expectedState: string): Promise<Server> {
   });
 }
 
-async function fetchEmailAddress(auth: Auth.OAuth2Client): Promise<string> {
-  const gmail = google.gmail({ version: "v1", auth });
-  const profile = await gmail.users.getProfile({ userId: "me" });
+async function fetchEmailAddress(auth: GmailOAuthClient): Promise<string> {
+  const profile = await gmail({ version: "v1", auth }).users.getProfile({ userId: "me" });
   const email = profile.data.emailAddress;
 
   if (!email) throw new PostbusError("Could not read the mailbox email address.");
