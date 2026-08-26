@@ -9,6 +9,15 @@ import type { MailboxHint } from "./query.js";
 // calls in a row, so the connection stays warm briefly instead of reconnecting.
 const IDLE_TTL_MS = 60_000;
 
+// Fifty users with three mailboxes each is 150 potential TLS connections and
+// 150 cached folder listings, all held for a minute after their last use.
+// Evict the least recently used instead of growing without limit.
+const MAX_POOLED_CONNECTIONS = 32;
+
+// Calls against one mailbox are serialised, so without a ceiling a client can
+// queue an unbounded number of requests each waiting up to MAIL_TIMEOUT_MS.
+const MAX_QUEUE_DEPTH = 4;
+
 export interface ImapContext {
   client: ImapFlow;
   // Capabilities that decide how we search and how we thread.
@@ -21,14 +30,39 @@ interface PooledConnection {
   context: ImapContext;
   timer: NodeJS.Timeout;
   mailboxes?: ListResponse[];
+  lastUsed: number;
 }
 
 const pool = new Map<string, PooledConnection>();
 
 // Kept out of the pool so the very first connect is serialized too.
 const queues = new Map<string, Promise<unknown>>();
+const depths = new Map<string, number>();
 
 export async function withImap<T>(
+  account: ImapAccount,
+  fn: (context: ImapContext) => Promise<T>,
+): Promise<T> {
+  const depth = depths.get(account.id) ?? 0;
+  if (depth >= MAX_QUEUE_DEPTH) {
+    throw new PostbusError(
+      "Too many requests are already queued for this mailbox.",
+      "IMAP allows one operation at a time per mailbox. Wait for the running calls to finish.",
+      "transient",
+    );
+  }
+
+  depths.set(account.id, depth + 1);
+  try {
+    return await enqueue(account, fn);
+  } finally {
+    const remaining = (depths.get(account.id) ?? 1) - 1;
+    if (remaining > 0) depths.set(account.id, remaining);
+    else depths.delete(account.id);
+  }
+}
+
+async function enqueue<T>(
   account: ImapAccount,
   fn: (context: ImapContext) => Promise<T>,
 ): Promise<T> {
@@ -105,11 +139,32 @@ async function acquire(account: ImapAccount): Promise<PooledConnection> {
       serverThreads: client.capabilities.has("X-GM-EXT-1") || client.capabilities.has("OBJECTID"),
     },
     timer: setTimeout(() => release(account.id), IDLE_TTL_MS),
+    lastUsed: Date.now(),
   };
   connection.timer.unref?.();
 
   pool.set(account.id, connection);
+  evictOverflow(account.id);
+
   return connection;
+}
+
+function evictOverflow(keep: string): void {
+  while (pool.size > MAX_POOLED_CONNECTIONS) {
+    let oldest: string | undefined;
+    let oldestUsed = Infinity;
+
+    for (const [accountId, connection] of pool) {
+      if (accountId === keep) continue;
+      if (connection.lastUsed < oldestUsed) {
+        oldestUsed = connection.lastUsed;
+        oldest = accountId;
+      }
+    }
+
+    if (!oldest) return;
+    void release(oldest);
+  }
 }
 
 function touch(accountId: string): void {
@@ -119,6 +174,7 @@ function touch(accountId: string): void {
   clearTimeout(connection.timer);
   connection.timer = setTimeout(() => release(accountId), IDLE_TTL_MS);
   connection.timer.unref?.();
+  connection.lastUsed = Date.now();
 }
 
 /**
@@ -144,6 +200,10 @@ export function release(accountId: string): Promise<void> {
 
 // Awaited on shutdown: releasing without waiting meant process.exit() ran
 // before LOGOUT left the socket, and the mail server kept the session open.
+export function pooledConnectionCount(): number {
+  return pool.size;
+}
+
 export async function closeAllConnections(): Promise<void> {
   await Promise.allSettled([...pool.keys()].map((accountId) => release(accountId)));
 }

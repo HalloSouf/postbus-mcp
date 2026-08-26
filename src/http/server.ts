@@ -2,6 +2,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { MAX_BODY_SIZE, TRUST_PROXY } from "../config.js";
 import { getDb } from "../db/index.js";
 import { logEvent } from "../log.js";
+import { pooledConnectionCount } from "../providers/imap/connection.js";
 import { requireUser } from "./auth.js";
 import { handleMcpRequest } from "./mcp.js";
 import { rateLimit } from "./rate-limit.js";
@@ -18,7 +19,11 @@ export function createApp(): Express {
   app.get("/health", (_req, res) => {
     try {
       getDb().prepare("SELECT 1").get();
-      res.json({ status: "ok", service: "postbus-mcp" });
+      res.json({
+        status: "ok",
+        service: "postbus-mcp",
+        pooledConnections: pooledConnectionCount(),
+      });
     } catch (error) {
       logEvent({ event: "health", ok: false, error: String(error) });
       res.status(503).json({ status: "unavailable", service: "postbus-mcp" });

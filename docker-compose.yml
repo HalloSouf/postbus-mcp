@@ -49,6 +49,10 @@ services:
       traefik.http.routers.postbus.tls: "true"
       traefik.http.routers.postbus.tls.certresolver: letsencrypt
       traefik.http.services.postbus.loadbalancer.server.port: "3000"
+      # Without this Traefik keeps routing to a container Docker has already
+      # marked unhealthy.
+      traefik.http.services.postbus.loadbalancer.healthcheck.path: /health
+      traefik.http.services.postbus.loadbalancer.healthcheck.interval: 30s
 
 volumes:
   postbus-data:
