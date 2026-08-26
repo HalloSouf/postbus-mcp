@@ -125,7 +125,9 @@ export function registerMailTools(server: McpServer, context: ToolContext): void
         reply_to: z.string().optional().describe("Reply-To address, if it differs."),
         html: z.boolean().default(false).describe("Send the body as HTML instead of plain text."),
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      // Sending cannot be undone and the content may have been steered by a
+      // message the model just read, so clients must ask before calling this.
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     ({ account, to, subject, body, cc, bcc, reply_to, html }) =>
       guard(async () => {
