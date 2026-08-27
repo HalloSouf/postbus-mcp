@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { simpleParser } from "mailparser";
 import { composeMail } from "../../../src/providers/imap/smtp.js";
 import type { ImapAccount } from "../../../src/types.js";
 
@@ -136,5 +137,33 @@ describe("threading a reply", () => {
 
     expect(headersOf(mail.raw)).not.toContain("In-Reply-To");
     expect(headersOf(mail.raw)).not.toContain("References");
+  });
+});
+
+describe("attachments", () => {
+  const inner = Buffer.from("From: a@x.com\r\nSubject: Inner\r\n\r\nInner body\r\n", "utf8");
+
+  // Without an explicit disposition nodemailer marks a message/rfc822 part
+  // inline, and mailparser then reports zero attachments: a forward arrived
+  // looking like it carried nothing.
+  it("marks a forwarded original as a real attachment", async () => {
+    const mail = await composeMail(ACCOUNT, "a@x.com", "Fwd: Inner", "FYI", {
+      attachments: [{ filename: "Inner.eml", content: inner, contentType: "message/rfc822" }],
+    });
+
+    const parsed = await simpleParser(mail.raw);
+
+    expect(parsed.attachments).toHaveLength(1);
+    expect(parsed.attachments[0]?.filename).toBe("Inner.eml");
+    expect(parsed.attachments[0]?.contentType).toBe("message/rfc822");
+  });
+
+  it("keeps the original readable inside the attachment", async () => {
+    const mail = await composeMail(ACCOUNT, "a@x.com", "Fwd: Inner", "FYI", {
+      attachments: [{ filename: "Inner.eml", content: inner, contentType: "message/rfc822" }],
+    });
+
+    const parsed = await simpleParser(mail.raw);
+    expect(parsed.attachments[0]?.content.toString("utf8")).toContain("Inner body");
   });
 });

@@ -64,6 +64,13 @@ export async function composeMail(
     references: options.references,
     subject,
     messageId,
+    // Without an explicit disposition nodemailer marks a message/rfc822 part
+    // inline, and every reader then treats it as a quoted message rather than
+    // a file you can open.
+    attachments: options.attachments?.map((attachment) => ({
+      ...attachment,
+      contentDisposition: "attachment" as const,
+    })),
     ...(options.html ? { html: body } : { text: body }),
   });
 

@@ -208,6 +208,12 @@ export async function closeAllConnections(): Promise<void> {
   await Promise.allSettled([...pool.keys()].map((accountId) => release(accountId)));
 }
 
+/** Drops the cached folder list, after creating or removing a folder. */
+export function forgetMailboxes(accountId: string): void {
+  const connection = pool.get(accountId);
+  if (connection) delete connection.mailboxes;
+}
+
 export async function listMailboxes(
   accountId: string,
   context: ImapContext,

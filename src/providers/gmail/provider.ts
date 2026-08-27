@@ -9,11 +9,25 @@ import {
   type SearchResult,
   type SendOptions,
   type SendResult,
+  type BatchResult,
+  type FlagChange,
+  type FolderInfo,
+  type ForwardOptions,
+  type ReplyOptions,
 } from "../../types.js";
 import { stripHtml } from "../imap/parse.js";
 import { mapLimit, normalizeDate } from "../../util.js";
 import { createClientForRefreshToken } from "./auth.js";
 import { buildMimeMessage, toBase64Url } from "./mime.js";
+import {
+  allDone,
+  assertNotSystemLabel,
+  labelChangeFor,
+  resolveLabelIds,
+  toFolderInfo,
+  type GmailLabel,
+} from "./actions.js";
+import { buildForward, buildReply } from "../imap/reply.js";
 
 const METADATA_HEADERS = ["From", "To", "Cc", "Subject", "Date"];
 const MAX_PARALLEL_FETCHES = 5;
@@ -122,6 +136,208 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
     // provider returns the former, both used to be labelled "Message-ID", and
     // only one of them is what a reply threads against.
     return { messageId: built.messageId, notes: [] };
+  }
+
+  async reply(
+    account: GmailApiAccount,
+    messageId: string,
+    body: string,
+    options: ReplyOptions = {},
+  ): Promise<SendResult> {
+    const original = await this.getMessage(account, messageId);
+    const composed = buildReply(original, body, account.email, options);
+
+    const result = await this.send(account, composed.to, composed.subject, composed.body, {
+      cc: composed.cc,
+      bcc: options.bcc,
+      html: options.html,
+      inReplyTo: composed.inReplyTo,
+      references: composed.references,
+    });
+
+    await this.modify(account, [messageId], [], ["UNREAD"]).catch(() => undefined);
+    return result;
+  }
+
+  async forward(
+    account: GmailApiAccount,
+    messageId: string,
+    to: string,
+    options: ForwardOptions = {},
+  ): Promise<SendResult> {
+    const original = await this.getMessage(account, messageId);
+    const composed = buildForward(original, to, options);
+    const raw = await this.rawMessage(account, messageId);
+
+    const built = await buildMimeMessage({
+      from: { name: account.displayName, address: account.email },
+      to: composed.to,
+      subject: composed.subject,
+      body: composed.body,
+      cc: options.cc,
+      bcc: options.bcc,
+      attachments: raw
+        ? [
+            {
+              filename: `${original.subject.slice(0, 60) || "message"}.eml`,
+              content: raw,
+              contentType: "message/rfc822",
+            },
+          ]
+        : undefined,
+    });
+
+    await call(() =>
+      this.client(account).users.messages.send({
+        userId: "me",
+        requestBody: { raw: toBase64Url(built.raw) },
+      }),
+    );
+
+    return { messageId: built.messageId, notes: [] };
+  }
+
+  async listFolders(account: GmailApiAccount): Promise<FolderInfo[]> {
+    const labels = await this.labels(account);
+    return labels.map(toFolderInfo).sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  async createFolder(account: GmailApiAccount, path: string): Promise<string> {
+    const response = await call(() =>
+      this.client(account).users.labels.create({ userId: "me", requestBody: { name: path } }),
+    );
+
+    return response.data.name ?? path;
+  }
+
+  async renameFolder(account: GmailApiAccount, path: string, newPath: string): Promise<string> {
+    const label = await this.requireLabel(account, path);
+    assertNotSystemLabel(label);
+
+    const response = await call(() =>
+      this.client(account).users.labels.patch({
+        userId: "me",
+        id: label.id as string,
+        requestBody: { name: newPath },
+      }),
+    );
+
+    return response.data.name ?? newPath;
+  }
+
+  async deleteFolder(account: GmailApiAccount, path: string): Promise<void> {
+    const label = await this.requireLabel(account, path);
+    assertNotSystemLabel(label);
+
+    await call(() =>
+      this.client(account).users.labels.delete({ userId: "me", id: label.id as string }),
+    );
+  }
+
+  // A folder move in Gmail is a label swap: put the target on, take the inbox off.
+  async moveMessages(
+    account: GmailApiAccount,
+    messageIds: string[],
+    target: string,
+  ): Promise<BatchResult> {
+    const [labelId] = resolveLabelIds([target], await this.labels(account));
+    await this.modify(account, messageIds, [labelId as string], ["INBOX"]);
+
+    return allDone(messageIds, [`Moved to "${target}".`]);
+  }
+
+  async archiveMessages(account: GmailApiAccount, messageIds: string[]): Promise<BatchResult> {
+    await this.modify(account, messageIds, [], ["INBOX"]);
+    return allDone(messageIds, ["Removed from the inbox."]);
+  }
+
+  async trashMessages(account: GmailApiAccount, messageIds: string[]): Promise<BatchResult> {
+    await mapLimit(messageIds, MAX_PARALLEL_FETCHES, (id) =>
+      call(() => this.client(account).users.messages.trash({ userId: "me", id })),
+    );
+
+    return allDone(messageIds, ["Moved to the trash."]);
+  }
+
+  async markMessages(
+    account: GmailApiAccount,
+    messageIds: string[],
+    change: FlagChange,
+  ): Promise<BatchResult> {
+    const { add, remove } = labelChangeFor(change);
+    await this.modify(account, messageIds, add, remove);
+
+    return allDone(messageIds, [`Marked as ${change}.`]);
+  }
+
+  async labelMessages(
+    account: GmailApiAccount,
+    messageIds: string[],
+    add: string[],
+    remove: string[],
+  ): Promise<BatchResult> {
+    if (add.length === 0 && remove.length === 0) {
+      throw new PostbusError("Nothing to add or remove.", "Pass at least one label.");
+    }
+
+    const labels = await this.labels(account);
+    await this.modify(
+      account,
+      messageIds,
+      resolveLabelIds(add, labels),
+      resolveLabelIds(remove, labels),
+    );
+
+    const notes: string[] = [];
+    if (add.length > 0) notes.push(`Added: ${add.join(", ")}.`);
+    if (remove.length > 0) notes.push(`Removed: ${remove.join(", ")}.`);
+    return allDone(messageIds, notes);
+  }
+
+  private async modify(
+    account: GmailApiAccount,
+    messageIds: string[],
+    addLabelIds: string[],
+    removeLabelIds: string[],
+  ): Promise<void> {
+    if (messageIds.length === 0) {
+      throw new PostbusError("No message ids given.", "Pass at least one id from search_emails.");
+    }
+
+    await call(() =>
+      this.client(account).users.messages.batchModify({
+        userId: "me",
+        requestBody: { ids: messageIds, addLabelIds, removeLabelIds },
+      }),
+    );
+  }
+
+  private async labels(account: GmailApiAccount): Promise<GmailLabel[]> {
+    const response = await call(() => this.client(account).users.labels.list({ userId: "me" }));
+    return response.data.labels ?? [];
+  }
+
+  private async requireLabel(account: GmailApiAccount, path: string): Promise<GmailLabel> {
+    const labels = await this.labels(account);
+    const [id] = resolveLabelIds([path], labels);
+
+    return labels.find((label) => label.id === id) as GmailLabel;
+  }
+
+  private async rawMessage(
+    account: GmailApiAccount,
+    messageId: string,
+  ): Promise<Buffer | undefined> {
+    try {
+      const response = await call(() =>
+        this.client(account).users.messages.get({ userId: "me", id: messageId, format: "raw" }),
+      );
+
+      const raw = response.data.raw;
+      return raw ? Buffer.from(raw, "base64url") : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private client(account: GmailApiAccount): gmail_v1.Gmail {

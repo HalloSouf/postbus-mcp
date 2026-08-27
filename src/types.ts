@@ -72,6 +72,8 @@ export interface MessageDetail extends MessageSummary {
   bcc?: string;
   replyTo?: string;
   messageId?: string;
+  /** Raw References header, so a reply can extend the chain. */
+  references?: string;
   body: string;
   bodyFormat: "text" | "html";
   attachments: AttachmentInfo[];
@@ -85,10 +87,52 @@ export interface SearchResult {
 }
 
 /** What was sent, plus anything that went sideways after it left. */
+export interface FolderInfo {
+  path: string;
+  name: string;
+  /** \Sent, \Trash, \Archive … when the server declares one. */
+  specialUse?: string;
+  /** Whether the folder can hold messages, or is only a parent. */
+  selectable: boolean;
+}
+
+/** What a mark_messages call changes. */
+export type FlagChange = "read" | "unread" | "star" | "unstar";
+
+// Batch actions are partial by nature: a message may have moved between the
+// search and the action. Report both halves instead of failing the whole call.
+export interface BatchResult {
+  done: string[];
+  failed: Array<{ id: string; reason: string }>;
+  notes: string[];
+}
+
+export interface ReplyOptions {
+  /** Reply to everyone on the original, not just the sender. */
+  all?: boolean;
+  cc?: string;
+  bcc?: string;
+  html?: boolean;
+}
+
+export interface ForwardOptions {
+  /** Text placed above the forwarded message. */
+  note?: string;
+  cc?: string;
+  bcc?: string;
+}
+
 export interface SendResult {
   /** The RFC 5322 Message-ID, which is what a reply threads against. */
   messageId: string;
   notes: string[];
+}
+
+/** An outgoing attachment. */
+export interface Attachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
 }
 
 export interface SendOptions {
@@ -99,6 +143,8 @@ export interface SendOptions {
   /** Message-ID of the message being answered, so clients thread the reply. */
   inReplyTo?: string;
   references?: string;
+  /** Only used internally, by forward. Not exposed as a tool argument. */
+  attachments?: Attachment[];
 }
 
 // Providers receive a fully resolved account. Alias lookup happens in the tool
@@ -121,6 +167,33 @@ export interface MailProvider<A extends MailAccount = MailAccount> {
     body: string,
     options?: SendOptions,
   ): Promise<SendResult>;
+
+  reply(account: A, messageId: string, body: string, options?: ReplyOptions): Promise<SendResult>;
+
+  forward(account: A, messageId: string, to: string, options?: ForwardOptions): Promise<SendResult>;
+
+  listFolders(account: A): Promise<FolderInfo[]>;
+
+  createFolder(account: A, path: string): Promise<string>;
+
+  renameFolder(account: A, path: string, newPath: string): Promise<string>;
+
+  deleteFolder(account: A, path: string): Promise<void>;
+
+  moveMessages(account: A, messageIds: string[], target: string): Promise<BatchResult>;
+
+  archiveMessages(account: A, messageIds: string[]): Promise<BatchResult>;
+
+  trashMessages(account: A, messageIds: string[]): Promise<BatchResult>;
+
+  markMessages(account: A, messageIds: string[], change: FlagChange): Promise<BatchResult>;
+
+  labelMessages(
+    account: A,
+    messageIds: string[],
+    add: string[],
+    remove: string[],
+  ): Promise<BatchResult>;
 }
 
 /**

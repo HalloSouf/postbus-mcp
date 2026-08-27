@@ -6,7 +6,8 @@
 
 A self-hosted [MCP](https://modelcontextprotocol.io) server that lets you and a
 handful of people around you work with your mailboxes from Claude or any other
-MCP client: search, read whole conversations, and send mail.
+MCP client: search, read whole conversations, send, reply, forward, and keep the
+whole thing tidy with folders and labels.
 
 Works with **any IMAP/SMTP provider** — Gmail, Outlook, Fastmail, your own mail
 server — using a plain **app password**. No Google Cloud project, no OAuth
@@ -22,8 +23,8 @@ Claude / MCP client
         ▼
    POST /mcp  ──►  postbus-mcp  ──►  SQLite (users + encrypted app passwords)
                         │
-                        ├──►  IMAP  (imapflow)      search, read, threads
-                        └──►  SMTP  (nodemailer)    sending
+                        ├──►  IMAP  (imapflow)      search, read, threads, folders
+                        └──►  SMTP  (nodemailer)    sending, replies, forwards
 ```
 
 ---
@@ -211,17 +212,62 @@ when the server offers it. If that assumption is wrong for your server, pass
 
 ## Available tools
 
-| Tool                  | What it does                                                                   |
-| --------------------- | ------------------------------------------------------------------------------ |
-| `list_accounts`       | Lists your mailboxes with alias and email address                              |
-| `add_mail_account`    | Links an IMAP/SMTP mailbox with an app password (tests the connection first)   |
-| `remove_mail_account` | Unlinks a mailbox and wipes the stored app password                            |
-| `search_emails`       | Searches with Gmail-style syntax; returns an `id` and a `threadId` per message |
-| `get_message`         | Full content of one message: headers, body, attachment metadata                |
-| `get_thread`          | Every message in a conversation, oldest first                                  |
-| `send_email`          | Sends a new message straight away (cc, bcc, reply-to, html)                    |
+**Mailboxes**
+
+| Tool                  | What it does                                                                 |
+| --------------------- | ---------------------------------------------------------------------------- |
+| `list_accounts`       | Lists your mailboxes with alias and email address                            |
+| `add_mail_account`    | Links an IMAP/SMTP mailbox with an app password (tests the connection first) |
+| `remove_mail_account` | Unlinks a mailbox and wipes the stored app password                          |
+
+**Reading**
+
+| Tool            | What it does                                                                   |
+| --------------- | ------------------------------------------------------------------------------ |
+| `search_emails` | Searches with Gmail-style syntax; returns an `id` and a `threadId` per message |
+| `get_message`   | Full content of one message: headers, body, attachment metadata                |
+| `get_thread`    | Every message in a conversation, oldest first                                  |
+
+**Writing**
+
+| Tool               | What it does                                                                    |
+| ------------------ | ------------------------------------------------------------------------------- |
+| `send_email`       | Sends a new message straight away (cc, bcc, reply-to, html)                     |
+| `reply_to_message` | Replies in the same conversation; recipients, subject and quoting are filled in |
+| `forward_message`  | Forwards a message, with the original attached as `.eml`                        |
+
+**Organising** — these all take a list of ids, so one call can handle twenty messages
+
+| Tool               | What it does                                  |
+| ------------------ | --------------------------------------------- |
+| `archive_messages` | Out of the inbox, nothing deleted             |
+| `trash_messages`   | To the trash, still recoverable               |
+| `move_messages`    | Into any folder                               |
+| `mark_messages`    | Read, unread, starred, unstarred              |
+| `label_messages`   | Adds or removes Gmail labels                  |
+| `list_folders`     | Every folder, with the special ones marked    |
+| `create_folder`    | New folder or Gmail label, nesting included   |
+| `rename_folder`    | Renames one, keeping its messages             |
+| `delete_folder`    | Removes one; refuses Sent, Trash and the like |
 
 Every tool only ever touches mailboxes belonging to the user behind the token.
+
+There is deliberately **no permanent delete**. `trash_messages` moves mail to the
+trash and nothing empties it, so anything Claude removes can be recovered from
+your own mail client.
+
+### Folders or labels
+
+Gmail has labels, everyone else has folders, and the two behave differently: a
+message carries several labels at once but sits in exactly one folder. The tools
+follow whichever the server actually has.
+
+- `move_messages`, `list_folders` and `create_folder` work everywhere. On Gmail a
+  folder is a label, and moving means swapping the inbox label for another one.
+- `label_messages` is Gmail only. On other servers it says so and points at
+  `move_messages` instead of half-doing something.
+- `archive_messages` means "out of the inbox" on both: Gmail drops the inbox
+  label, other servers move the message to Archive.
 
 ---
 
@@ -524,7 +570,7 @@ src/
 ├── http/                 Express app, bearer auth, rate limit, MCP transport
 ├── providers/
 │   ├── registry.ts       account -> provider
-│   ├── imap/             IMAP/SMTP: connections, search, threading, sending
+│   ├── imap/             IMAP/SMTP: connections, search, threading, sending, actions
 │   └── gmail/            optional Gmail API provider (OAuth)
 ├── tools/                the MCP tools (they know no provider)
 └── cli/                  admin scripts: users and tokens
