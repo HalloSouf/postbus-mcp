@@ -409,6 +409,16 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
     return labelMessages(account, messageIds, add, remove);
   }
 
+  setLabelColor(): Promise<string> {
+    // No IMAP extension carries label colours; X-GM-LABELS is names only.
+    throw new PostbusError(
+      "IMAP cannot set label colours.",
+      "Colours live in Gmail itself and are only reachable through the Gmail API provider. " +
+        "Over IMAP a label is just a name.",
+      "invalid_input",
+    );
+  }
+
   /** Sends a composed reply or forward and files the same bytes in Sent. */
   private async deliver(
     account: ImapAccount,

@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { FlagChange } from "../types.js";
 import { resolveAccount, type ToolContext } from "./context.js";
+import { colorNames } from "../providers/gmail/colors.js";
 import { formatBatchResult, formatFolders } from "./format.js";
 import { guard } from "./guard.js";
 
@@ -261,6 +262,47 @@ export function registerFolderTools(server: McpServer, context: ToolContext): vo
       guard("rename_folder", context.user, async () => {
         const { account: resolved, provider } = resolveAccount(context, alias);
         return `Renamed to "${await provider.renameFolder(resolved, path, new_path)}".`;
+      }),
+  );
+
+  server.registerTool(
+    "set_label_color",
+    {
+      title: "Colour a Gmail label",
+      description:
+        "Gives a Gmail label a colour. Pass a name for `color` (" +
+        colorNames().join(", ") +
+        "), or an exact background_color and text_color. Gmail only accepts its own palette, " +
+        "so an arbitrary hex is rejected. Gmail only: over IMAP a label is just a name, and " +
+        "mailboxes linked with an app password cannot do this.",
+      inputSchema: {
+        account,
+        label: z.string().min(1).describe("The label to colour, from list_folders."),
+        color: z
+          .string()
+          .optional()
+          .describe(`Colour name: ${colorNames().join(", ")}.`),
+        background_color: z
+          .string()
+          .optional()
+          .describe("Exact background hex from Gmail's palette, instead of `color`."),
+        text_color: z
+          .string()
+          .optional()
+          .describe("Exact text hex from Gmail's palette, instead of `color`."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    ({ account: alias, label, color, background_color, text_color }) =>
+      guard("set_label_color", context.user, async () => {
+        const { account: resolved, provider } = resolveAccount(context, alias);
+        const named = await provider.setLabelColor(resolved, label, {
+          color,
+          backgroundColor: background_color,
+          textColor: text_color,
+        });
+
+        return `Coloured label "${named}" ${color ?? `${background_color} on ${text_color}`}.`;
       }),
   );
 

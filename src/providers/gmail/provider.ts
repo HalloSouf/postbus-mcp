@@ -14,6 +14,7 @@ import {
   type FolderInfo,
   type ForwardOptions,
   type ReplyOptions,
+  type LabelColorInput,
 } from "../../types.js";
 import { stripHtml } from "../imap/parse.js";
 import { mapLimit, normalizeDate } from "../../util.js";
@@ -28,6 +29,7 @@ import {
   type GmailLabel,
 } from "./actions.js";
 import { buildForward, buildReply } from "../imap/reply.js";
+import { resolveLabelColor } from "./colors.js";
 
 const METADATA_HEADERS = ["From", "To", "Cc", "Subject", "Date"];
 const MAX_PARALLEL_FETCHES = 5;
@@ -292,6 +294,25 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
     if (add.length > 0) notes.push(`Added: ${add.join(", ")}.`);
     if (remove.length > 0) notes.push(`Removed: ${remove.join(", ")}.`);
     return allDone(messageIds, notes);
+  }
+
+  async setLabelColor(
+    account: GmailApiAccount,
+    label: string,
+    color: LabelColorInput,
+  ): Promise<string> {
+    const resolved = await this.requireLabel(account, label);
+    assertNotSystemLabel(resolved);
+
+    const response = await call(() =>
+      this.client(account).users.labels.patch({
+        userId: "me",
+        id: resolved.id as string,
+        requestBody: { color: resolveLabelColor(color) },
+      }),
+    );
+
+    return response.data.name ?? label;
   }
 
   private async modify(

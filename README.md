@@ -244,6 +244,7 @@ when the server offers it. If that assumption is wrong for your server, pass
 | `move_messages`    | Into any folder                               |
 | `mark_messages`    | Read, unread, starred, unstarred              |
 | `label_messages`   | Adds or removes Gmail labels                  |
+| `set_label_color`  | Gives a Gmail label a colour                  |
 | `list_folders`     | Every folder, with the special ones marked    |
 | `create_folder`    | New folder or Gmail label, nesting included   |
 | `rename_folder`    | Renames one, keeping its messages             |
@@ -263,8 +264,9 @@ follow whichever the server actually has.
 
 - `move_messages`, `list_folders` and `create_folder` work everywhere. On Gmail a
   folder is a label, and moving means swapping the inbox label for another one.
-- `label_messages` is Gmail only. On other servers it says so and points at
-  `move_messages` instead of half-doing something.
+- `label_messages` and `set_label_color` are Gmail only, and `set_label_color`
+  additionally needs the mailbox linked through the Gmail API rather than IMAP:
+  no IMAP extension carries a label colour. Over IMAP a label is just a name.
 - `archive_messages` means "out of the inbox" on both: Gmail drops the inbox
   label, other servers move the message to Archive.
 

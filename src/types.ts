@@ -96,6 +96,13 @@ export interface FolderInfo {
   selectable: boolean;
 }
 
+/** A colour by name, or an explicit pair from Gmail's palette. */
+export interface LabelColorInput {
+  color?: string;
+  backgroundColor?: string;
+  textColor?: string;
+}
+
 /** What a mark_messages call changes. */
 export type FlagChange = "read" | "unread" | "star" | "unstar";
 
@@ -194,6 +201,8 @@ export interface MailProvider<A extends MailAccount = MailAccount> {
     add: string[],
     remove: string[],
   ): Promise<BatchResult>;
+
+  setLabelColor(account: A, label: string, color: LabelColorInput): Promise<string>;
 }
 
 /**
