@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Attachment } from "../../types.js";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 
 export interface MimeAddress {
@@ -17,6 +18,7 @@ export interface MimeMessage {
   html?: boolean | undefined;
   inReplyTo?: string | undefined;
   references?: string | undefined;
+  attachments?: Attachment[] | undefined;
 }
 
 // Composed by nodemailer, exactly like the IMAP/SMTP path: it parses addresses
@@ -42,6 +44,10 @@ export async function buildMimeMessage(message: MimeMessage): Promise<BuiltMessa
     cc: message.cc,
     bcc: message.bcc,
     replyTo: message.replyTo,
+    attachments: message.attachments?.map((attachment) => ({
+      ...attachment,
+      contentDisposition: "attachment" as const,
+    })),
     inReplyTo: message.inReplyTo,
     references: message.references,
     subject: message.subject,

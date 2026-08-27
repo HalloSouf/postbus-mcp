@@ -176,6 +176,7 @@ export async function toDetail(
     bcc: addressText(parsed.bcc) || undefined,
     replyTo: parsed.replyTo?.text || undefined,
     messageId: parsed.messageId,
+    references: joinHeader(parsed.references),
     subject: parsed.subject || "(no subject)",
     date: toIso(parsed.date ?? message.internalDate),
     snippet: makeSnippet(body),

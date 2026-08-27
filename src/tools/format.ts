@@ -1,4 +1,10 @@
-import type { AccountInfo, MessageDetail, MessageSummary } from "../types.js";
+import type {
+  AccountInfo,
+  BatchResult,
+  FolderInfo,
+  MessageDetail,
+  MessageSummary,
+} from "../types.js";
 
 // Everything a mailbox returns was written by whoever sent the mail. Marking it
 // as data is the only thing standing between "read my inbox" and an incoming
@@ -160,4 +166,38 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function formatFolders(alias: string, folders: FolderInfo[]): string {
+  if (folders.length === 0) return `No folders found in "${alias}".`;
+
+  const lines = folders.map((folder) => {
+    const marks = [folder.specialUse, folder.selectable ? undefined : "no messages"]
+      .filter(Boolean)
+      .join(", ");
+
+    return `- ${folder.path}${marks ? `  (${marks})` : ""}`;
+  });
+
+  return [`Folders in "${alias}" (${folders.length}):`, "", ...lines].join("\n");
+}
+
+// A batch is partial by nature, so say what did not happen. Reporting only the
+// successes reads as "all done" when half the ids were stale.
+export function formatBatchResult(action: string, result: BatchResult): string {
+  const lines = [`${action}: ${result.done.length} succeeded, ${result.failed.length} failed.`];
+
+  if (result.notes.length > 0) lines.push(...result.notes);
+
+  if (result.failed.length > 0) {
+    lines.push("", "Not done:");
+    for (const failure of result.failed.slice(0, 20)) {
+      lines.push(`- ${failure.id}: ${failure.reason}`);
+    }
+    if (result.failed.length > 20) {
+      lines.push(`- … and ${result.failed.length - 20} more`);
+    }
+  }
+
+  return lines.join("\n");
 }

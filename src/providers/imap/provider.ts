@@ -15,6 +15,11 @@ import {
   type SearchResult,
   type SendOptions,
   type SendResult,
+  type BatchResult,
+  type FlagChange,
+  type FolderInfo,
+  type ForwardOptions,
+  type ReplyOptions,
 } from "../../types.js";
 import {
   imapTlsOptions,
@@ -28,6 +33,18 @@ import { decodeMessageId, decodeThreadId } from "./ids.js";
 import { hasAttachments, makeSnippetFromSource, toDetail, toSummary } from "./parse.js";
 import { parseQuery, type MailboxHint } from "./query.js";
 import { composeMail, sendComposed, verifySmtp } from "./smtp.js";
+import {
+  archiveMessages,
+  createFolder,
+  deleteFolder,
+  labelMessages,
+  listFolders,
+  markMessages,
+  moveMessages,
+  renameFolder,
+  trashMessages,
+} from "./actions.js";
+import { buildForward, buildReply } from "./reply.js";
 
 const SNIPPET_BYTES = 4096;
 
@@ -296,6 +313,141 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
     }
 
     return { messageId: mail.messageId, notes };
+  }
+
+  async reply(
+    account: ImapAccount,
+    messageId: string,
+    body: string,
+    options: ReplyOptions = {},
+  ): Promise<SendResult> {
+    const original = await this.getMessage(account, messageId);
+    const composed = buildReply(original, body, account.email, options);
+
+    const result = await this.deliver(account, composed, {
+      cc: composed.cc,
+      bcc: options.bcc,
+      html: options.html,
+      inReplyTo: composed.inReplyTo,
+      references: composed.references,
+    });
+
+    // \\Answered is what mail clients use to draw the reply arrow.
+    await markMessages(account, [messageId], "read").catch(() => undefined);
+    await this.flagAnswered(account, messageId);
+
+    return result;
+  }
+
+  async forward(
+    account: ImapAccount,
+    messageId: string,
+    to: string,
+    options: ForwardOptions = {},
+  ): Promise<SendResult> {
+    const original = await this.getMessage(account, messageId);
+    const composed = buildForward(original, to, options);
+    const raw = await this.rawMessage(account, messageId);
+
+    return this.deliver(account, composed, {
+      cc: options.cc,
+      bcc: options.bcc,
+      attachments: raw
+        ? [
+            {
+              filename: `${original.subject.slice(0, 60) || "message"}.eml`,
+              content: raw,
+              contentType: "message/rfc822",
+            },
+          ]
+        : undefined,
+    });
+  }
+
+  listFolders(account: ImapAccount): Promise<FolderInfo[]> {
+    return listFolders(account);
+  }
+
+  createFolder(account: ImapAccount, path: string): Promise<string> {
+    return createFolder(account, path);
+  }
+
+  renameFolder(account: ImapAccount, path: string, newPath: string): Promise<string> {
+    return renameFolder(account, path, newPath);
+  }
+
+  deleteFolder(account: ImapAccount, path: string): Promise<void> {
+    return deleteFolder(account, path);
+  }
+
+  moveMessages(account: ImapAccount, messageIds: string[], target: string): Promise<BatchResult> {
+    return moveMessages(account, messageIds, target);
+  }
+
+  archiveMessages(account: ImapAccount, messageIds: string[]): Promise<BatchResult> {
+    return archiveMessages(account, messageIds);
+  }
+
+  trashMessages(account: ImapAccount, messageIds: string[]): Promise<BatchResult> {
+    return trashMessages(account, messageIds);
+  }
+
+  markMessages(
+    account: ImapAccount,
+    messageIds: string[],
+    change: FlagChange,
+  ): Promise<BatchResult> {
+    return markMessages(account, messageIds, change);
+  }
+
+  labelMessages(
+    account: ImapAccount,
+    messageIds: string[],
+    add: string[],
+    remove: string[],
+  ): Promise<BatchResult> {
+    return labelMessages(account, messageIds, add, remove);
+  }
+
+  /** Sends a composed reply or forward and files the same bytes in Sent. */
+  private async deliver(
+    account: ImapAccount,
+    composed: { to: string; subject: string; body: string },
+    options: SendOptions,
+  ): Promise<SendResult> {
+    return this.send(account, composed.to, composed.subject, composed.body, options);
+  }
+
+  /** The untouched source, so a forward carries the real original. */
+  private async rawMessage(account: ImapAccount, messageId: string): Promise<Buffer | undefined> {
+    const ref = decodeMessageId(messageId);
+
+    return withImap(account, async (context) => {
+      const lock = await context.client.getMailboxLock(ref.mailbox);
+      try {
+        const message = await context.client.fetchOne(
+          String(ref.uid),
+          { source: true },
+          { uid: true },
+        );
+        return message ? (message.source ?? undefined) : undefined;
+      } finally {
+        lock.release();
+      }
+    }).catch(() => undefined);
+  }
+
+  private async flagAnswered(account: ImapAccount, messageId: string): Promise<void> {
+    const ref = decodeMessageId(messageId);
+
+    await withImap(account, async (context) => {
+      const lock = await context.client.getMailboxLock(ref.mailbox);
+      try {
+        await context.client.messageFlagsAdd([ref.uid], ["\\Answered"], { uid: true });
+      } finally {
+        lock.release();
+      }
+    }).catch(() => undefined);
   }
 }
 

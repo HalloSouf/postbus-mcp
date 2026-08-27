@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   formatAccounts,
+  formatBatchResult,
+  formatFolders,
   formatMessage,
   formatSearchResults,
   formatThread,
@@ -171,5 +173,57 @@ describe("untrusted content fencing", () => {
 
     expect(body.match(/^===== END UNTRUSTED EMAIL CONTENT =====$/gm)).toHaveLength(1);
     expect(body.trimEnd().endsWith("===== END UNTRUSTED EMAIL CONTENT =====")).toBe(true);
+  });
+});
+
+describe("formatBatchResult", () => {
+  // Reporting only the successes reads as "all done" when half the ids were
+  // stale, which is exactly when the model should stop and say something.
+  it("names what did not happen, not just what did", () => {
+    const output = formatBatchResult("Archived", {
+      done: ["INBOX:1:1", "INBOX:1:2"],
+      failed: [{ id: "INBOX:1:9", reason: "id expired, search again" }],
+      notes: ['Moved to "Archive".'],
+    });
+
+    expect(output).toContain("2 succeeded, 1 failed");
+    expect(output).toContain('Moved to "Archive".');
+    expect(output).toContain("INBOX:1:9: id expired, search again");
+  });
+
+  it("caps a long failure list instead of dumping hundreds of lines", () => {
+    const failed = Array.from({ length: 25 }, (_, index) => ({
+      id: `INBOX:1:${index}`,
+      reason: "gone",
+    }));
+
+    const output = formatBatchResult("Moved", { done: [], failed, notes: [] });
+
+    expect(output).toContain("and 5 more");
+    expect(output.split("\n").length).toBeLessThan(30);
+  });
+
+  it("stays quiet about failures when there are none", () => {
+    const output = formatBatchResult("Marked", { done: ["a"], failed: [], notes: [] });
+
+    expect(output).toBe("Marked: 1 succeeded, 0 failed.");
+  });
+});
+
+describe("formatFolders", () => {
+  it("marks the special folders so the model can pick a target", () => {
+    const output = formatFolders("work", [
+      { path: "INBOX", name: "INBOX", selectable: true },
+      { path: "[Gmail]/Sent Mail", name: "Sent Mail", specialUse: "\\Sent", selectable: true },
+      { path: "[Gmail]", name: "[Gmail]", selectable: false },
+    ]);
+
+    expect(output).toContain("- INBOX");
+    expect(output).toContain("[Gmail]/Sent Mail  (\\Sent)");
+    expect(output).toContain("no messages");
+  });
+
+  it("says so when a mailbox has no folders", () => {
+    expect(formatFolders("work", [])).toContain("No folders found");
   });
 });
