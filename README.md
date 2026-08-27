@@ -1,7 +1,6 @@
 # postbus-mcp
 
 [![Code quality](https://github.com/HalloSouf/postbus-mcp/actions/workflows/code-quality.yml/badge.svg)](https://github.com/HalloSouf/postbus-mcp/actions/workflows/code-quality.yml)
-[![Docker](https://github.com/HalloSouf/postbus-mcp/actions/workflows/docker.yml/badge.svg)](https://github.com/HalloSouf/postbus-mcp/actions/workflows/docker.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A self-hosted [MCP](https://modelcontextprotocol.io) server that lets you and a
@@ -551,9 +550,12 @@ Then link a mailbox with `imap_host: 127.0.0.1`, `imap_port: 3143`,
 > mailbox.
 
 GitHub Actions runs the same checks on every push and pull request: formatting,
-types, `npm audit` over the production dependencies, the tests, and a docker
-build that boots the container and verifies that `/health` answers and `/mcp`
-returns 401 without a token. CI and the container both run Node 24.
+types, `npm audit` over the production dependencies, and the tests. CI and the
+container both run Node 24.
+
+The image is not built in CI. Deployment builds from the repository, so a broken
+Dockerfile surfaces there rather than here — check it locally with
+`docker compose up -d --build` when you touch it.
 
 ### Project layout
 
