@@ -285,7 +285,7 @@ conversation too.
 ```yaml
 services:
   postbus:
-    image: ghcr.io/hallosouf/postbus-mcp:${IMAGE_TAG:?pin a published tag}
+    build: .
     restart: unless-stopped
     environment:
       MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY in .env}
@@ -313,9 +313,6 @@ Things to watch:
 - `TRUST_PROXY=true` lets Express trust the `X-Forwarded-*` headers. It is off
   by default: only turn it on when something like Traefik really is in front,
   because otherwise any client can claim any address.
-- `IMAGE_TAG` has no default. CI publishes `sha-<short>` for every push to
-  `main`; pin one of those so a rollback is a tag change instead of a rebuild
-  on the server.
 - Terminate TLS at Traefik. Tokens travel as bearer credentials; without HTTPS
   they are in the clear.
 - The `postbus-data` volume holds the database with every encrypted app
@@ -510,8 +507,7 @@ Then link a mailbox with `imap_host: 127.0.0.1`, `imap_port: 3143`,
 GitHub Actions runs the same checks on every push and pull request: formatting,
 types, `npm audit` over the production dependencies, the tests, and a docker
 build that boots the container and verifies that `/health` answers and `/mcp`
-returns 401 without a token. A push to `main` publishes the image it just
-tested to GHCR as `sha-<short>`. CI and the container both run Node 24.
+returns 401 without a token. CI and the container both run Node 24.
 
 ### Project layout
 
