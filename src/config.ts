@@ -20,7 +20,9 @@ function findProjectRoot(): string {
 export const PROJECT_ROOT = findProjectRoot();
 
 // The MCP client starts us from an arbitrary cwd, so be explicit about .env.
-dotenv.config({ path: resolve(PROJECT_ROOT, ".env") });
+// quiet because dotenv 17 otherwise announces itself on stdout, which is where
+// the JSON log lines go — one banner and the stream stops being parseable.
+dotenv.config({ path: resolve(PROJECT_ROOT, ".env"), quiet: true });
 
 const port = z.coerce.number().int().min(1).max(65535);
 const bytes = z.coerce.number().int().positive();
