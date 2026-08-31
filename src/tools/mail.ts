@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { PostbusError } from "../types.js";
 import { truncate } from "../util.js";
 import { resolveAccount, type ToolContext } from "./context.js";
 import { formatMessage, formatSearchResults, formatThread } from "./format.js";
@@ -115,10 +116,10 @@ export function registerMailTools(server: McpServer, context: ToolContext): void
     {
       title: "Send a message",
       description:
-        "Sends a new message from one of your mailboxes straight away. There is no draft " +
-        "step, so confirm the content with the user first. Separate multiple recipients " +
-        "with commas. To answer an existing message, pass its Message-ID as in_reply_to so " +
-        "the reply threads properly.",
+        "Sends a new message from one of your mailboxes straight away, so confirm the content " +
+        "with the user first. To let them read it over before it goes out, use create_draft " +
+        "instead. Separate multiple recipients with commas. To answer an existing message, " +
+        "pass its Message-ID as in_reply_to so the reply threads properly.",
       inputSchema: {
         account: z.string().min(1).describe("Alias of the mailbox to send from."),
         to: z.string().min(1).describe("Recipient(s), comma separated."),
@@ -161,5 +162,90 @@ export function registerMailTools(server: McpServer, context: ToolContext): void
           .filter(Boolean)
           .join("\n");
       }),
+  );
+
+  server.registerTool(
+    "create_draft",
+    {
+      title: "Save a draft",
+      description:
+        "Writes a message into the Drafts folder without sending it, so the user can read " +
+        "it over and send it from their own mail client. Pass to and subject for a new " +
+        "message. To prepare an answer instead, pass reply_to_message_id: recipients, the " +
+        "Re: subject and the quoted original are filled in, and to and subject are ignored.",
+      inputSchema: {
+        account: z.string().min(1).describe("Alias of the mailbox to draft in."),
+        body: z.string().describe("Message body."),
+        to: z
+          .string()
+          .optional()
+          .describe("Recipient(s), comma separated. Required unless reply_to_message_id is set."),
+        subject: z
+          .string()
+          .optional()
+          .describe("Subject line. Required unless reply_to_message_id is set."),
+        reply_to_message_id: z
+          .string()
+          .optional()
+          .describe(
+            "The `id` of the message this draft answers, from search_emails or get_thread. " +
+              "Not the Message-ID header.",
+          ),
+        reply_all: z
+          .boolean()
+          .default(false)
+          .describe("With reply_to_message_id: keep everyone on the original in the answer."),
+        cc: z.string().optional().describe("Cc recipients, comma separated."),
+        bcc: z.string().optional().describe("Bcc recipients, comma separated."),
+        reply_to: z
+          .string()
+          .optional()
+          .describe("Reply-To address, if it differs. Ignored on a reply draft."),
+        html: z.boolean().default(false).describe("Treat the body as HTML instead of plain text."),
+      },
+      // Nothing leaves the mailbox, so this is the safe way to prepare mail.
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    ({ account, body, to, subject, reply_to_message_id, reply_all, cc, bcc, reply_to, html }) =>
+      guard("create_draft", context.user, async () => {
+        const { account: resolved, provider } = resolveAccount(context, account);
+
+        const draft = reply_to_message_id
+          ? await provider.createReplyDraft(resolved, reply_to_message_id, body, {
+              all: reply_all ?? false,
+              cc,
+              bcc,
+              html: html ?? false,
+            })
+          : await provider.createDraft(resolved, requireRecipient(to), subject ?? "", body, {
+              cc,
+              bcc,
+              replyTo: reply_to,
+              html: html ?? false,
+            });
+
+        return [
+          `Draft saved in "${account}" (${resolved.email}), folder ${draft.folder}. Nothing was sent.`,
+          reply_to_message_id ? `It answers message ${reply_to_message_id}.` : `To: ${to}`,
+          cc ? `Cc: ${cc}` : undefined,
+          draft.id ? `Draft id: ${draft.id} — get_message reads it back.` : undefined,
+          `Message-ID: ${draft.messageId}`,
+          ...draft.notes,
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }),
+  );
+}
+
+// Only a reply draft can work out its own recipient; anything else without a
+// `to` would end up in Drafts addressed to nobody.
+function requireRecipient(to: string | undefined): string {
+  if (to?.trim()) return to;
+
+  throw new PostbusError(
+    "A draft needs a recipient.",
+    "Pass `to`, or pass reply_to_message_id to answer an existing message.",
+    "invalid_input",
   );
 }

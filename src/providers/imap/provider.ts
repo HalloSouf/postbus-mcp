@@ -16,6 +16,7 @@ import {
   type SendOptions,
   type SendResult,
   type BatchResult,
+  type DraftResult,
   type FlagChange,
   type FolderInfo,
   type ForwardOptions,
@@ -29,10 +30,10 @@ import {
   withImap,
   type ImapContext,
 } from "./connection.js";
-import { decodeMessageId, decodeThreadId } from "./ids.js";
+import { decodeMessageId, decodeThreadId, encodeMessageId } from "./ids.js";
 import { hasAttachments, makeSnippetFromSource, toDetail, toSummary } from "./parse.js";
 import { parseQuery, type MailboxHint } from "./query.js";
-import { composeMail, sendComposed, verifySmtp } from "./smtp.js";
+import { composeMail, sendComposed, verifySmtp, type ComposedMail } from "./smtp.js";
 import {
   archiveMessages,
   createFolder,
@@ -339,6 +340,43 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
     return result;
   }
 
+  async createDraft(
+    account: ImapAccount,
+    to: string,
+    subject: string,
+    body: string,
+    options: SendOptions = {},
+  ): Promise<DraftResult> {
+    return this.appendDraft(account, await composeMail(account, to, subject, body, options, true));
+  }
+
+  async createReplyDraft(
+    account: ImapAccount,
+    messageId: string,
+    body: string,
+    options: ReplyOptions = {},
+  ): Promise<DraftResult> {
+    const original = await this.getMessage(account, messageId);
+    const composed = buildReply(original, body, account.email, options);
+
+    const mail = await composeMail(
+      account,
+      composed.to,
+      composed.subject,
+      composed.body,
+      {
+        cc: composed.cc,
+        bcc: options.bcc,
+        html: options.html,
+        inReplyTo: composed.inReplyTo,
+        references: composed.references,
+      },
+      true,
+    );
+
+    return this.appendDraft(account, mail);
+  }
+
   async forward(
     account: ImapAccount,
     messageId: string,
@@ -426,6 +464,45 @@ export class ImapSmtpProvider implements MailProvider<ImapAccount> {
     options: SendOptions,
   ): Promise<SendResult> {
     return this.send(account, composed.to, composed.subject, composed.body, options);
+  }
+
+  /** Files a composed message in Drafts, unsent, with the \Draft flag set. */
+  private async appendDraft(account: ImapAccount, mail: ComposedMail): Promise<DraftResult> {
+    return withImap(account, async (context) => {
+      const drafts = await resolveMailbox(account.id, context, "drafts");
+
+      if (!drafts) {
+        throw new PostbusError(
+          "This mailbox has no Drafts folder, so the draft could not be stored.",
+          'Create one with create_folder ("Drafts"), or send the message directly with send_email.',
+          "upstream",
+        );
+      }
+
+      // \Seen as well: a draft the user wrote themselves is not new mail, and
+      // without it every draft shows up in the unread count.
+      const appended = await context.client.append(drafts, mail.raw, ["\\Draft", "\\Seen"]);
+
+      // UIDPLUS is what makes the append addressable afterwards. Without it the
+      // draft is filed correctly but there is no id to hand back.
+      const id =
+        appended && appended.uid && appended.uidValidity !== undefined
+          ? encodeMessageId({
+              mailbox: appended.destination ?? drafts,
+              uidValidity: String(appended.uidValidity),
+              uid: appended.uid,
+            })
+          : undefined;
+
+      return {
+        id,
+        messageId: mail.messageId,
+        folder: drafts,
+        notes: id
+          ? []
+          : ["This server does not report ids for stored drafts, so this one has none here."],
+      };
+    });
   }
 
   /** The untouched source, so a forward carries the real original. */

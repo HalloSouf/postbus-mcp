@@ -135,6 +135,16 @@ export interface SendResult {
   notes: string[];
 }
 
+/** A draft that was filed in the mailbox. Nothing has been sent. */
+export interface DraftResult {
+  /** Usable with get_message. Absent when the server reports no uid for the append. */
+  id?: string;
+  messageId: string;
+  /** Where the draft was filed, so the user knows where to open it. */
+  folder: string;
+  notes: string[];
+}
+
 /** An outgoing attachment. */
 export interface Attachment {
   filename: string;
@@ -176,6 +186,21 @@ export interface MailProvider<A extends MailAccount = MailAccount> {
   ): Promise<SendResult>;
 
   reply(account: A, messageId: string, body: string, options?: ReplyOptions): Promise<SendResult>;
+
+  createDraft(
+    account: A,
+    to: string,
+    subject: string,
+    body: string,
+    options?: SendOptions,
+  ): Promise<DraftResult>;
+
+  createReplyDraft(
+    account: A,
+    messageId: string,
+    body: string,
+    options?: ReplyOptions,
+  ): Promise<DraftResult>;
 
   forward(account: A, messageId: string, to: string, options?: ForwardOptions): Promise<SendResult>;
 

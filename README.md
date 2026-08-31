@@ -232,6 +232,7 @@ when the server offers it. If that assumption is wrong for your server, pass
 | Tool               | What it does                                                                    |
 | ------------------ | ------------------------------------------------------------------------------- |
 | `send_email`       | Sends a new message straight away (cc, bcc, reply-to, html)                     |
+| `create_draft`     | Puts a message in Drafts without sending it; also drafts replies                |
 | `reply_to_message` | Replies in the same conversation; recipients, subject and quoting are filled in |
 | `forward_message`  | Forwards a message, with the original attached as `.eml`                        |
 
@@ -251,6 +252,13 @@ when the server offers it. If that assumption is wrong for your server, pass
 | `delete_folder`    | Removes one; refuses Sent, Trash and the like |
 
 Every tool only ever touches mailboxes belonging to the user behind the token.
+
+`create_draft` is the way to let mail wait for you: it writes the message into
+the Drafts folder (`users.drafts.create` on Gmail, an `APPEND` with the `\Draft`
+flag elsewhere) and sends nothing. Pass `reply_to_message_id` and the recipients,
+the `Re:` subject, the quoted original and the threading headers are filled in
+for you, exactly like `reply_to_message` — only the message stays in Drafts until
+you send it yourself.
 
 There is deliberately **no permanent delete**. `trash_messages` moves mail to the
 trash and nothing empties it, so anything Claude removes can be recovered from
@@ -421,8 +429,10 @@ outcome and error kind. Never mail content, addresses or search queries.
 **Untrusted content.** Message bodies and snippets reach the model inside
 explicit markers saying they are data. That is a mitigation, not a fix: a
 message can still try to talk the model into sending mail, which is why
-`send_email` is marked destructive so clients ask before calling it. Treat
-anything a mailbox returns as attacker-controlled.
+`send_email` is marked destructive so clients ask before calling it, and why
+`create_draft` exists: a draft you read before sending is a message no prompt
+injection got to send on your behalf. Treat anything a mailbox returns as
+attacker-controlled.
 
 **What this is not.** No fine-grained permissions, and no audit trail beyond
 the log line above. This is built for a handful of people you know, behind TLS.

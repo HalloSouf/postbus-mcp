@@ -72,6 +72,20 @@ describe("composeMail", () => {
     expect(mail.envelope.to).toContain("colleague@example.com");
   });
 
+  // A draft is never handed to SMTP, so the envelope cannot carry its Bcc.
+  it("keeps bcc in the headers when the message is kept as a draft", async () => {
+    const mail = await composeMail(
+      ACCOUNT,
+      "client@example.com",
+      "Hello",
+      "Text",
+      { bcc: "hidden@example.com" },
+      true,
+    );
+
+    expect(headersOf(mail.raw)).toContain("Bcc: hidden@example.com");
+  });
+
   it("picks up every recipient from a comma-separated list", async () => {
     const mail = await composeMail(ACCOUNT, "een@x.nl, twee@x.nl", "Hello", "Text");
 

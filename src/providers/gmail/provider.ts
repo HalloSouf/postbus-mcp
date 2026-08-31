@@ -10,6 +10,7 @@ import {
   type SendOptions,
   type SendResult,
   type BatchResult,
+  type DraftResult,
   type FlagChange,
   type FolderInfo,
   type ForwardOptions,
@@ -159,6 +160,55 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
 
     await this.modify(account, [messageId], [], ["UNREAD"]).catch(() => undefined);
     return result;
+  }
+
+  async createDraft(
+    account: GmailApiAccount,
+    to: string,
+    subject: string,
+    body: string,
+    options: SendOptions = {},
+  ): Promise<DraftResult> {
+    const built = await buildMimeMessage({
+      from: { name: account.displayName, address: account.email },
+      to,
+      subject,
+      body,
+      cc: options.cc,
+      bcc: options.bcc,
+      replyTo: options.replyTo,
+      html: options.html,
+      inReplyTo: options.inReplyTo,
+      references: options.references,
+    });
+
+    return this.storeDraft(account, built);
+  }
+
+  async createReplyDraft(
+    account: GmailApiAccount,
+    messageId: string,
+    body: string,
+    options: ReplyOptions = {},
+  ): Promise<DraftResult> {
+    const original = await this.getMessage(account, messageId);
+    const composed = buildReply(original, body, account.email, options);
+
+    const built = await buildMimeMessage({
+      from: { name: account.displayName, address: account.email },
+      to: composed.to,
+      subject: composed.subject,
+      body: composed.body,
+      cc: composed.cc,
+      bcc: options.bcc,
+      html: options.html,
+      inReplyTo: composed.inReplyTo,
+      references: composed.references,
+    });
+
+    // Without the threadId Gmail files the draft as a new conversation, so the
+    // user sees their answer sitting next to the mail it answers.
+    return this.storeDraft(account, built, original.threadId);
   }
 
   async forward(
@@ -313,6 +363,30 @@ export class GmailApiProvider implements MailProvider<GmailApiAccount> {
     );
 
     return response.data.name ?? label;
+  }
+
+  /** Stores a composed message as a draft; Gmail sends nothing until asked. */
+  private async storeDraft(
+    account: GmailApiAccount,
+    built: { raw: Buffer; messageId: string },
+    threadId?: string,
+  ): Promise<DraftResult> {
+    const response = await call(() =>
+      this.client(account).users.drafts.create({
+        userId: "me",
+        requestBody: {
+          message: { raw: toBase64Url(built.raw), ...(threadId ? { threadId } : {}) },
+        },
+      }),
+    );
+
+    // The message id, not the draft id: that is the one get_message accepts.
+    return {
+      id: response.data.message?.id ?? undefined,
+      messageId: built.messageId,
+      folder: "DRAFTS",
+      notes: [],
+    };
   }
 
   private async modify(

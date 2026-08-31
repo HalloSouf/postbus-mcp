@@ -48,6 +48,7 @@ export async function composeMail(
   subject: string,
   body: string,
   options: SendOptions = {},
+  keepBcc = false,
 ): Promise<ComposedMail> {
   const domain = account.email.split("@")[1] || "postbus-mcp.local";
   const messageId = `<${randomUUID()}@${domain}>`;
@@ -75,8 +76,10 @@ export async function composeMail(
   });
 
   const node = composer.compile();
-  // Bcc belongs in the envelope, not in the headers of the message itself.
-  node.keepBcc = false;
+  // Bcc belongs in the envelope, not in the headers of the message itself. A
+  // draft never reaches an envelope, so there it has to stay in the headers or
+  // the user opens the draft with its Bcc silently gone.
+  node.keepBcc = keepBcc;
 
   return { messageId, raw: await node.build(), envelope: node.getEnvelope() };
 }
