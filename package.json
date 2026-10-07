@@ -45,24 +45,24 @@
   ],
   "dependencies": {
     "@googleapis/gmail": "^18.0.0",
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "imapflow": "^1.7.6",
-    "mailparser": "^3.9.16",
+    "mailparser": "^3.9.34",
     "nodemailer": "^9.0.5",
-    "open": "^11.0.1",
-    "zod": "^4.4.3"
+    "open": "^11.0.4",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",
-    "@types/mailparser": "^3.4.6",
+    "@types/mailparser": "^3.9.0",
     "@types/node": "^24.0.0",
     "@types/nodemailer": "^8.0.1",
-    "prettier": "^3.9.6",
-    "tsx": "^4.19.0",
+    "prettier": "^3.9.9",
+    "tsx": "^4.23.15",
     "typescript": "^5.6.0",
     "vitest": "^4.1.11"
   }
